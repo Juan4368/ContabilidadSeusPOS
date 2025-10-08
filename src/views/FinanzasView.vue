@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 type Registro = {
   id: number
@@ -82,6 +82,20 @@ const irASeccion = (seccion: SeccionDetalle) => {
 const volverAlInicio = () => {
   seccionActiva.value = 'landing'
 }
+
+const manejarEscape = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && seccionActiva.value !== 'landing') {
+    volverAlInicio()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', manejarEscape)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', manejarEscape)
+})
 
 watch(seccionActiva, () => {
   menuAbierto.value = false
@@ -258,56 +272,66 @@ const landingCards = computed(() =>
       </div>
     </section>
 
-    <section v-else-if="detalleVisible" class="panel detalle">
-      <button class="volver" type="button" @click="volverAlInicio">← Volver al inicio</button>
+    <transition name="detalle">
+      <div
+        v-if="detalleVisible"
+        class="detalle-modal"
+        role="dialog"
+        aria-modal="true"
+        @click.self="volverAlInicio"
+      >
+        <section class="panel detalle" @click.stop>
+          <button class="volver" type="button" @click="volverAlInicio">← Volver al inicio</button>
 
-      <header class="detalle__encabezado">
-        <span class="detalle__icono" aria-hidden="true">{{ detalleVisible.icono }}</span>
-        <div>
-          <h2>{{ detalleVisible.titulo }}</h2>
-          <p>{{ detalleVisible.descripcion }}</p>
-        </div>
-      </header>
+          <header class="detalle__encabezado">
+            <span class="detalle__icono" aria-hidden="true">{{ detalleVisible.icono }}</span>
+            <div>
+              <h2>{{ detalleVisible.titulo }}</h2>
+              <p>{{ detalleVisible.descripcion }}</p>
+            </div>
+          </header>
 
-      <form class="formulario" @submit.prevent="enviarFormulario">
-        <label class="campo">
-          <span>Monto</span>
-          <input v-model.number="detalleVisible.formulario.monto" type="number" min="0" step="0.01" required />
-        </label>
-        <label class="campo">
-          <span>Categoría</span>
-          <input
-            v-model="detalleVisible.formulario.categoria"
-            type="text"
-            :placeholder="detalleVisible.categoriaPlaceholder"
-            required
-          />
-        </label>
-        <label class="campo">
-          <span>Fecha</span>
-          <input v-model="detalleVisible.formulario.fecha" type="date" required />
-        </label>
-        <label class="campo">
-          <span>Notas</span>
-          <textarea
-            v-model="detalleVisible.formulario.notas"
-            rows="2"
-            :placeholder="detalleVisible.notasPlaceholder"
-          ></textarea>
-        </label>
-        <button class="primario" type="submit">Guardar registro</button>
-      </form>
+          <form class="formulario" @submit.prevent="enviarFormulario">
+            <label class="campo">
+              <span>Monto</span>
+              <input v-model.number="detalleVisible.formulario.monto" type="number" min="0" step="0.01" required />
+            </label>
+            <label class="campo">
+              <span>Categoría</span>
+              <input
+                v-model="detalleVisible.formulario.categoria"
+                type="text"
+                :placeholder="detalleVisible.categoriaPlaceholder"
+                required
+              />
+            </label>
+            <label class="campo">
+              <span>Fecha</span>
+              <input v-model="detalleVisible.formulario.fecha" type="date" required />
+            </label>
+            <label class="campo">
+              <span>Notas</span>
+              <textarea
+                v-model="detalleVisible.formulario.notas"
+                rows="2"
+                :placeholder="detalleVisible.notasPlaceholder"
+              ></textarea>
+            </label>
+            <button class="primario" type="submit">Guardar registro</button>
+          </form>
 
-      <ul class="registros" aria-live="polite">
-        <li v-for="registro in detalleVisible.registros" :key="registro.id">
-          <span class="categoria">{{ registro.categoria }}</span>
-          <span class="monto">${{ registro.monto.toFixed(2) }}</span>
-          <span class="fecha">{{ registro.fecha }}</span>
-          <p v-if="registro.notas">{{ registro.notas }}</p>
-        </li>
-        <li v-if="detalleVisible.registros.length === 0" class="vacio">{{ detalleVisible.vacio }}</li>
-      </ul>
-    </section>
+          <ul class="registros" aria-live="polite">
+            <li v-for="registro in detalleVisible.registros" :key="registro.id">
+              <span class="categoria">{{ registro.categoria }}</span>
+              <span class="monto">${{ registro.monto.toFixed(2) }}</span>
+              <span class="fecha">{{ registro.fecha }}</span>
+              <p v-if="registro.notas">{{ registro.notas }}</p>
+            </li>
+            <li v-if="detalleVisible.registros.length === 0" class="vacio">{{ detalleVisible.vacio }}</li>
+          </ul>
+        </section>
+      </div>
+    </transition>
   </main>
 </template>
 
@@ -316,6 +340,7 @@ const landingCards = computed(() =>
   display: grid;
   gap: 2.5rem;
   position: relative;
+  min-height: 100vh;
 }
 
 .menu-dinamico {
@@ -408,25 +433,34 @@ const landingCards = computed(() =>
 }
 
 .card {
-  background: linear-gradient(145deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.95));
+  background: linear-gradient(150deg, rgba(30, 64, 175, 0.3), rgba(15, 23, 42, 0.95));
   border-radius: 1.25rem;
   padding: 1.75rem;
   display: grid;
   gap: 0.75rem;
-  box-shadow: 0 0.75rem 2.5rem rgba(2, 6, 23, 0.55);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 0.85rem 2.75rem rgba(2, 6, 23, 0.6);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
   outline: none;
-  border: 1px solid rgba(51, 65, 85, 0.8);
+  border: 1px solid rgba(96, 165, 250, 0.2);
 }
 
 .card:hover,
 .card:focus-visible {
   transform: translateY(-6px);
-  box-shadow: 0 1.35rem 3rem rgba(2, 6, 23, 0.7);
+  box-shadow: 0 1.5rem 3.25rem rgba(2, 6, 23, 0.75);
+  border-color: rgba(96, 165, 250, 0.45);
 }
 
 .card__icono {
   font-size: 2rem;
+  width: 3.25rem;
+  height: 3.25rem;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 1rem;
+  background: radial-gradient(circle at top, rgba(59, 130, 246, 0.9), rgba(14, 116, 144, 0.75));
+  box-shadow: 0 0.75rem 1.75rem rgba(59, 130, 246, 0.35);
+  filter: saturate(1.15);
 }
 
 .card h2 {
@@ -441,13 +475,13 @@ const landingCards = computed(() =>
 }
 
 .panel {
-  background: rgba(15, 23, 42, 0.9);
+  background: linear-gradient(155deg, rgba(15, 23, 42, 0.95), rgba(30, 58, 138, 0.7));
   border-radius: 1.25rem;
-  box-shadow: 0 0.75rem 2.5rem rgba(2, 6, 23, 0.65);
+  box-shadow: 0 1rem 3rem rgba(2, 6, 23, 0.7);
   padding: 2rem;
   display: grid;
   gap: 2rem;
-  border: 1px solid rgba(51, 65, 85, 0.8);
+  border: 1px solid rgba(96, 165, 250, 0.25);
 }
 
 .detalle__encabezado {
@@ -458,6 +492,13 @@ const landingCards = computed(() =>
 
 .detalle__icono {
   font-size: 2.25rem;
+  width: 3.75rem;
+  height: 3.75rem;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 1.25rem;
+  background: radial-gradient(circle at top, rgba(34, 211, 238, 0.9), rgba(59, 130, 246, 0.85));
+  box-shadow: 0 1rem 2.5rem rgba(34, 211, 238, 0.35);
 }
 
 .detalle__encabezado h2 {
@@ -468,6 +509,28 @@ const landingCards = computed(() =>
 .detalle__encabezado p {
   margin: 0;
   color: #cbd5f5;
+}
+
+.detalle-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 1.5rem;
+  background: radial-gradient(circle at top, rgba(30, 41, 59, 0.65), rgba(2, 6, 23, 0.85));
+  backdrop-filter: blur(6px);
+  z-index: 20;
+}
+
+.detalle-enter-active,
+.detalle-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.detalle-enter-from,
+.detalle-leave-to {
+  opacity: 0;
 }
 
 .volver {
