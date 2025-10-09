@@ -1,76 +1,148 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
-type Registro = {
-  id: number
+import { crearCartera, listarCartera } from '../services/cartera'
+import { crearEgreso, listarEgresos } from '../services/egresos'
+import { crearIngreso, listarIngresos } from '../services/ingresos'
+import { listarCategorias } from '../services/categorias'
+import type { Categoria, Registro, RegistroPayload, TipoRegistro } from '../services/tipos'
+import { renderMarkdown } from '../utils/markdown'
+
+type SeccionDetalle = TipoRegistro
+
+type FormularioRegistro = {
   monto: number
-  categoria: string
+  categoriaId: number | null
   fecha: string
   notas: string
 }
-
-type SeccionDetalle = 'ingresos' | 'egresos' | 'cartera'
 
 const ingresos = ref<Registro[]>([])
 const egresos = ref<Registro[]>([])
 const cartera = ref<Registro[]>([])
 
-const formularioIngreso = reactive({
-  monto: 0,
-  categoria: '',
-  fecha: '',
-  notas: ''
-})
+const crearFormulario = (): FormularioRegistro =>
+  reactive({
+    monto: 0,
+    categoriaId: null,
+    fecha: '',
+    notas: ''
+  })
 
-const formularioEgreso = reactive({
-  monto: 0,
-  categoria: '',
-  fecha: '',
-  notas: ''
-})
+const formularioIngreso = crearFormulario()
+const formularioEgreso = crearFormulario()
+const formularioCartera = crearFormulario()
 
-const formularioCartera = reactive({
-  monto: 0,
-  categoria: '',
-  fecha: '',
-  notas: ''
-})
-
-const ultimoId = ref(0)
-
-const limpiarFormulario = (formulario: typeof formularioIngreso) => {
+const limpiarFormulario = (formulario: FormularioRegistro) => {
   formulario.monto = 0
-  formulario.categoria = ''
+  formulario.categoriaId = null
   formulario.fecha = ''
   formulario.notas = ''
 }
 
-const crearRegistro = (datos: typeof formularioIngreso) => {
-  ultimoId.value += 1
+const categorias = ref<Categoria[]>([])
 
-  return {
-    id: ultimoId.value,
-    monto: datos.monto,
-    categoria: datos.categoria,
-    fecha: datos.fecha,
-    notas: datos.notas
+const estadoSecciones = reactive<Record<SeccionDetalle, { cargando: boolean; error: string | null }>>({
+  ingresos: { cargando: false, error: null },
+  egresos: { cargando: false, error: null },
+  cartera: { cargando: false, error: null }
+})
+
+const estadoCategorias = reactive({ cargando: false, error: null as string | null })
+
+const categoriasPorTipo = computed<Record<SeccionDetalle, Categoria[]>>(() => {
+  const base: Record<SeccionDetalle, Categoria[]> = {
+    ingresos: [],
+    egresos: [],
+    cartera: []
+  }
+
+  categorias.value.forEach((categoria) => {
+    base[categoria.tipo]?.push(categoria)
+  })
+
+  return base
+})
+
+const categoriasPorId = computed(() => {
+  const mapa = new Map<number, Categoria>()
+  categorias.value.forEach((categoria) => mapa.set(categoria.id, categoria))
+  return mapa
+})
+
+const seleccionarCategoriaPredeterminada = (tipo: SeccionDetalle) => {
+  const opciones = categoriasPorTipo.value[tipo]
+  const formulario = configuracionSecciones[tipo].formulario
+
+  if (formulario.categoriaId === null && opciones.length > 0) {
+    formulario.categoriaId = opciones[0].id
   }
 }
 
-const agregarIngreso = () => {
-  ingresos.value.push(crearRegistro(formularioIngreso))
-  limpiarFormulario(formularioIngreso)
+const cargarCategorias = async () => {
+  estadoCategorias.cargando = true
+  estadoCategorias.error = null
+
+  try {
+    categorias.value = await listarCategorias()
+    ;(['ingresos', 'egresos', 'cartera'] as SeccionDetalle[]).forEach(seleccionarCategoriaPredeterminada)
+  } catch (error) {
+    console.error('Error al cargar categorías', error)
+    estadoCategorias.error = 'No fue posible cargar las categorías desde el servidor.'
+  } finally {
+    estadoCategorias.cargando = false
+  }
 }
 
-const agregarEgreso = () => {
-  egresos.value.push(crearRegistro(formularioEgreso))
-  limpiarFormulario(formularioEgreso)
+const cargarRegistros = async (tipo: SeccionDetalle, accionListar: () => Promise<Registro[]>, destino: typeof ingresos) => {
+  estadoSecciones[tipo].cargando = true
+  estadoSecciones[tipo].error = null
+
+  try {
+    destino.value = await accionListar()
+  } catch (error) {
+    console.error(`Error al cargar ${tipo}`, error)
+    estadoSecciones[tipo].error = 'No se pudieron recuperar los registros. Inténtalo nuevamente.'
+  } finally {
+    estadoSecciones[tipo].cargando = false
+  }
 }
 
-const agregarCartera = () => {
-  cartera.value.push(crearRegistro(formularioCartera))
-  limpiarFormulario(formularioCartera)
+const agregarRegistro = async (
+  tipo: SeccionDetalle,
+  formulario: FormularioRegistro,
+  accionCrear: (payload: RegistroPayload) => Promise<Registro>,
+  destino: typeof ingresos
+) => {
+  if (formulario.categoriaId === null) {
+    estadoSecciones[tipo].error = 'Selecciona una categoría antes de guardar.'
+    return
+  }
+
+  estadoSecciones[tipo].error = null
+
+  try {
+    const categoriaId = formulario.categoriaId
+    const payload: RegistroPayload = {
+      monto: formulario.monto,
+      categoriaId,
+      fecha: formulario.fecha,
+      notas: formulario.notas
+    }
+
+    const registroCreado = await accionCrear(payload)
+    destino.value = [...destino.value, registroCreado]
+    limpiarFormulario(formulario)
+    seleccionarCategoriaPredeterminada(tipo)
+  } catch (error) {
+    console.error(`Error al crear ${tipo}`, error)
+    estadoSecciones[tipo].error = 'No fue posible guardar el registro. Revisa los datos e inténtalo de nuevo.'
+  }
 }
+
+const agregarIngreso = () => agregarRegistro('ingresos', formularioIngreso, crearIngreso, ingresos)
+const agregarEgreso = () => agregarRegistro('egresos', formularioEgreso, crearEgreso, egresos)
+const agregarCartera = () => agregarRegistro('cartera', formularioCartera, crearCartera, cartera)
 
 const seccionActiva = ref<'landing' | SeccionDetalle>('landing')
 const menuAbierto = ref(false)
@@ -91,6 +163,10 @@ const manejarEscape = (event: KeyboardEvent) => {
 
 onMounted(() => {
   window.addEventListener('keydown', manejarEscape)
+  cargarCategorias()
+  cargarRegistros('ingresos', listarIngresos, ingresos)
+  cargarRegistros('egresos', listarEgresos, egresos)
+  cargarRegistros('cartera', listarCartera, cartera)
 })
 
 onBeforeUnmount(() => {
@@ -104,12 +180,12 @@ watch(seccionActiva, () => {
 type ConfiguracionSeccion = {
   titulo: string
   descripcion: string
-  formulario: typeof formularioIngreso
+  formulario: FormularioRegistro
   registros: typeof ingresos
   categoriaPlaceholder: string
   notasPlaceholder: string
   vacio: string
-  accion: () => void
+  accion: () => Promise<void>
   icono: string
 }
 
@@ -150,6 +226,16 @@ const configuracionSecciones: Record<SeccionDetalle, ConfiguracionSeccion> = {
 }
 
 const seccionActivaDetalle = computed(() => (seccionActiva.value === 'landing' ? null : seccionActiva.value))
+
+watch(seccionActivaDetalle, (nuevaSeccion) => {
+  if (nuevaSeccion) {
+    seleccionarCategoriaPredeterminada(nuevaSeccion)
+  }
+})
+
+watch(categoriasPorTipo, () => {
+  ;(['ingresos', 'egresos', 'cartera'] as SeccionDetalle[]).forEach(seleccionarCategoriaPredeterminada)
+})
 
 type DestinoMenu = 'landing' | SeccionDetalle
 
@@ -196,27 +282,45 @@ const detalleVisible = computed(() => {
 
   const clave = seccionActivaDetalle.value
   const configuracion = configuracionSecciones[clave]
+  const categoriasDisponibles = categoriasPorTipo.value[clave]
+  const registrosDecorados = configuracion.registros.value.map((registro) => {
+    const categoria = categoriasPorId.value.get(registro.categoriaId)
+    const markdownPreferido = registro.categoriaMarkdown?.trim()
+    const categoriaNombre = categoria?.nombre ?? 'Sin categoría'
+    const markdownCategoria = categoria?.markdown?.trim()
+    const contenido = markdownPreferido || markdownCategoria || categoriaNombre
+    const categoriaHtml = renderMarkdown(contenido)
+
+    return {
+      ...registro,
+      categoriaNombre,
+      categoriaHtml
+    }
+  })
 
   return {
     clave,
     titulo: configuracion.titulo,
     descripcion: configuracion.descripcion,
     formulario: configuracion.formulario,
-    registros: configuracion.registros.value,
+    registros: registrosDecorados,
     categoriaPlaceholder: configuracion.categoriaPlaceholder,
     notasPlaceholder: configuracion.notasPlaceholder,
     vacio: configuracion.vacio,
     accion: configuracion.accion,
-    icono: configuracion.icono
+    icono: configuracion.icono,
+    categoriasDisponibles,
+    estado: estadoSecciones[clave],
+    categoriasEstado: estadoCategorias
   }
 })
 
-const enviarFormulario = () => {
+const enviarFormulario = async () => {
   if (!detalleVisible.value) {
     return
   }
 
-  detalleVisible.value.accion()
+  await detalleVisible.value.accion()
 }
 
 const landingCards = computed(() =>
@@ -298,12 +402,27 @@ const landingCards = computed(() =>
             </label>
             <label class="campo">
               <span>Categoría</span>
-              <input
-                v-model="detalleVisible.formulario.categoria"
-                type="text"
-                :placeholder="detalleVisible.categoriaPlaceholder"
+              <select
+                v-model="detalleVisible.formulario.categoriaId"
+                :disabled="detalleVisible.categoriasDisponibles.length === 0"
                 required
-              />
+              >
+                <option :value="null" disabled>Selecciona una categoría</option>
+                <option
+                  v-for="categoria in detalleVisible.categoriasDisponibles"
+                  :key="categoria.id"
+                  :value="categoria.id"
+                >
+                  {{ categoria.nombre }}
+                </option>
+              </select>
+              <small v-if="detalleVisible.categoriasEstado.cargando" class="ayuda">Cargando categorías...</small>
+              <small
+                v-else-if="detalleVisible.categoriasDisponibles.length === 0"
+                class="ayuda ayuda--error"
+              >
+                {{ detalleVisible.categoriasEstado.error ?? 'No hay categorías disponibles para este tipo.' }}
+              </small>
             </label>
             <label class="campo">
               <span>Fecha</span>
@@ -317,12 +436,25 @@ const landingCards = computed(() =>
                 :placeholder="detalleVisible.notasPlaceholder"
               ></textarea>
             </label>
-            <button class="primario" type="submit">Guardar registro</button>
+            <button
+              class="primario"
+              type="submit"
+              :disabled="
+                detalleVisible.estado.cargando ||
+                detalleVisible.categoriasDisponibles.length === 0 ||
+                detalleVisible.categoriasEstado.cargando
+              "
+            >
+              Guardar registro
+            </button>
           </form>
+
+          <p v-if="detalleVisible.estado.error" class="estado estado--error">{{ detalleVisible.estado.error }}</p>
+          <p v-else-if="detalleVisible.estado.cargando" class="estado estado--info">Cargando registros...</p>
 
           <ul class="registros" aria-live="polite">
             <li v-for="registro in detalleVisible.registros" :key="registro.id">
-              <span class="categoria">{{ registro.categoria }}</span>
+              <span class="categoria" v-html="registro.categoriaHtml" :aria-label="registro.categoriaNombre"></span>
               <span class="monto">${{ registro.monto.toFixed(2) }}</span>
               <span class="fecha">{{ registro.fecha }}</span>
               <p v-if="registro.notas">{{ registro.notas }}</p>
@@ -562,7 +694,8 @@ const landingCards = computed(() =>
 }
 
 input,
-textarea {
+textarea,
+select {
   font: inherit;
   padding: 0.6rem 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.35);
@@ -578,7 +711,8 @@ textarea::placeholder {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   outline: none;
   border-color: #60a5fa;
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25);
@@ -587,6 +721,16 @@ textarea:focus {
 
 textarea {
   resize: vertical;
+}
+
+select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #94a3b8 50%),
+    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+  background-position: calc(100% - 1.4rem) calc(1.1rem), calc(100% - 1rem) calc(1.1rem);
+  background-size: 0.4rem 0.4rem, 0.4rem 0.4rem;
+  background-repeat: no-repeat;
+  padding-right: 2.5rem;
 }
 
 .primario {
@@ -607,6 +751,36 @@ textarea {
   outline: none;
   transform: translateY(-1px);
   box-shadow: 0 14px 30px rgba(29, 78, 216, 0.5);
+}
+
+.primario:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: none;
+}
+
+.ayuda {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.ayuda--error {
+  color: #f87171;
+}
+
+.estado {
+  margin: 1.1rem 0 0.6rem;
+  font-size: 0.95rem;
+}
+
+.estado--error {
+  color: #f87171;
+}
+
+.estado--info {
+  color: #38bdf8;
 }
 
 .registros {
