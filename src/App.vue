@@ -105,4 +105,7 @@ const componenteActual = computed(() => vistas.find((vista) => vista.id === vist
   display: block;
   color: #cbd5e1;
 }
+
+@media (max-width: 768px) {
+}
 </style>
