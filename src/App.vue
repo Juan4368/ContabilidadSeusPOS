@@ -6,17 +6,19 @@ import POSView from './views/POSView.vue'
 import StockView from './views/StockView.vue'
 import AdminView from './views/AdminView.vue'
 import ProductosView from './views/ProductosView.vue'
+import PendientesView from './views/PendientesView.vue'
 
-type VistaId = 'pos' | 'finanzas' | 'stock' | 'admin' | 'productos'
+type VistaId = 'pos' | 'finanzas' | 'stock' | 'admin' | 'productos' | 'pendientes'
 
 const vistaActiva = ref<VistaId>('pos')
 
-const vistas = [
+const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componente: typeof POSView }> = [
   { id: 'pos', nombre: 'POS', descripcion: 'Cobro en mostrador', componente: POSView },
   { id: 'finanzas', nombre: 'Finanzas', descripcion: 'Ingresos, egresos y cartera', componente: FinanzasView },
   { id: 'stock', nombre: 'Stock', descripcion: 'Inventario y reposicion', componente: StockView },
   { id: 'admin', nombre: 'Admin', descripcion: 'Usuarios y categorias', componente: AdminView },
-  { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView }
+  { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView },
+  { id: 'pendientes', nombre: 'Pendientes', descripcion: 'Registros offline', componente: PendientesView }
 ]
 
 const componenteActual = computed(() => vistas.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView)

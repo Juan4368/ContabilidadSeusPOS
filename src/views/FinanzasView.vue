@@ -20,6 +20,34 @@ type FormularioRegistro = {
 const ingresos = ref<Registro[]>([])
 const egresos = ref<Registro[]>([])
 const cartera = ref<Registro[]>([])
+const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+
+const CACHE_CATEGORIAS_KEY = 'finanzas_categorias_cache'
+const cacheKeyRegistros = (tipo: SeccionDetalle) => `finanzas_${tipo}_cache`
+const queueKeyRegistros = (tipo: SeccionDetalle) => `finanzas_${tipo}_queue`
+
+const leerJson = <T,>(key: string): T | null => {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : null
+  } catch {
+    return null
+  }
+}
+
+const guardarJson = (key: string, data: unknown) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(data))
+  } catch {
+    // Ignora errores de storage
+  }
+}
+
+const pendientes = reactive<Record<SeccionDetalle, number>>({
+  ingresos: 0,
+  egresos: 0,
+  cartera: 0
+})
 
 const crearFormulario = (): FormularioRegistro =>
   reactive({
@@ -70,6 +98,32 @@ const categoriasPorId = computed(() => {
   return mapa
 })
 
+const totalPendientes = computed(() => pendientes.ingresos + pendientes.egresos + pendientes.cartera)
+
+const actualizarPendientes = (tipo: SeccionDetalle) => {
+  const cola = leerJson<RegistroPayload[]>(queueKeyRegistros(tipo)) ?? []
+  pendientes[tipo] = cola.length
+}
+
+const encolarRegistro = (tipo: SeccionDetalle, payload: RegistroPayload) => {
+  const cola = leerJson<RegistroPayload[]>(queueKeyRegistros(tipo)) ?? []
+  cola.push(payload)
+  guardarJson(queueKeyRegistros(tipo), cola)
+  actualizarPendientes(tipo)
+}
+
+const construirRegistroLocal = (payload: RegistroPayload): Registro => {
+  const categoria = categoriasPorId.value.get(payload.categoriaId)
+  return {
+    id: -Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
+    monto: payload.monto,
+    categoriaId: payload.categoriaId,
+    fecha: payload.fecha,
+    notas: payload.notas,
+    categoriaMarkdown: categoria?.markdown ?? null
+  }
+}
+
 const seleccionarCategoriaPredeterminada = (tipo: SeccionDetalle) => {
   const opciones = categoriasPorTipo.value[tipo]
   const formulario = configuracionSecciones[tipo].formulario
@@ -83,12 +137,21 @@ const cargarCategorias = async () => {
   estadoCategorias.cargando = true
   estadoCategorias.error = null
 
+  const cacheCategorias = leerJson<Categoria[]>(CACHE_CATEGORIAS_KEY)
+  if (cacheCategorias && cacheCategorias.length) {
+    categorias.value = cacheCategorias
+    ;(['ingresos', 'egresos', 'cartera'] as SeccionDetalle[]).forEach(seleccionarCategoriaPredeterminada)
+  }
+
   try {
     categorias.value = await listarCategorias()
+    guardarJson(CACHE_CATEGORIAS_KEY, categorias.value)
     ;(['ingresos', 'egresos', 'cartera'] as SeccionDetalle[]).forEach(seleccionarCategoriaPredeterminada)
   } catch (error) {
     console.error('Error al cargar categorías', error)
-    estadoCategorias.error = 'No fue posible cargar las categorías desde el servidor.'
+    estadoCategorias.error = cacheCategorias?.length
+      ? 'Sin conexión. Mostrando categorías guardadas.'
+      : 'No fue posible cargar las categorías desde el servidor.'
   } finally {
     estadoCategorias.cargando = false
   }
@@ -98,11 +161,19 @@ const cargarRegistros = async (tipo: SeccionDetalle, accionListar: () => Promise
   estadoSecciones[tipo].cargando = true
   estadoSecciones[tipo].error = null
 
+  const cacheRegistros = leerJson<Registro[]>(cacheKeyRegistros(tipo))
+  if (cacheRegistros && cacheRegistros.length) {
+    destino.value = cacheRegistros
+  }
+
   try {
     destino.value = await accionListar()
+    guardarJson(cacheKeyRegistros(tipo), destino.value)
   } catch (error) {
     console.error(`Error al cargar ${tipo}`, error)
-    estadoSecciones[tipo].error = 'No se pudieron recuperar los registros. Inténtalo nuevamente.'
+    estadoSecciones[tipo].error = cacheRegistros?.length
+      ? 'Sin conexión. Mostrando registros guardados.'
+      : 'No se pudieron recuperar los registros. Inténtalo nuevamente.'
   } finally {
     estadoSecciones[tipo].cargando = false
   }
@@ -130,14 +201,73 @@ const agregarRegistro = async (
       notas: formulario.notas
     }
 
+    if (!isOnline.value) {
+      const registroLocal = construirRegistroLocal(payload)
+      destino.value = [registroLocal, ...destino.value]
+      guardarJson(cacheKeyRegistros(tipo), destino.value)
+      encolarRegistro(tipo, payload)
+      estadoSecciones[tipo].error = 'Sin conexión. Registro guardado localmente para sincronizar.'
+      limpiarFormulario(formulario)
+      seleccionarCategoriaPredeterminada(tipo)
+      return
+    }
+
     const registroCreado = await accionCrear(payload)
     destino.value = [...destino.value, registroCreado]
+    guardarJson(cacheKeyRegistros(tipo), destino.value)
     limpiarFormulario(formulario)
     seleccionarCategoriaPredeterminada(tipo)
   } catch (error) {
     console.error(`Error al crear ${tipo}`, error)
+    const categoriaId = formulario.categoriaId
+    if (categoriaId !== null) {
+      const payload: RegistroPayload = {
+        monto: formulario.monto,
+        categoriaId,
+        fecha: formulario.fecha,
+        notas: formulario.notas
+      }
+      const registroLocal = construirRegistroLocal(payload)
+      destino.value = [registroLocal, ...destino.value]
+      guardarJson(cacheKeyRegistros(tipo), destino.value)
+      encolarRegistro(tipo, payload)
+      estadoSecciones[tipo].error = 'Sin conexión. Registro guardado localmente para sincronizar.'
+      limpiarFormulario(formulario)
+      seleccionarCategoriaPredeterminada(tipo)
+      return
+    }
     estadoSecciones[tipo].error = 'No fue posible guardar el registro. Revisa los datos e inténtalo de nuevo.'
   }
+}
+
+const sincronizarTipo = async (
+  tipo: SeccionDetalle,
+  accionCrear: (payload: RegistroPayload) => Promise<Registro>,
+  accionListar: () => Promise<Registro[]>,
+  destino: typeof ingresos
+) => {
+  const cola = leerJson<RegistroPayload[]>(queueKeyRegistros(tipo)) ?? []
+  if (!cola.length) {
+    actualizarPendientes(tipo)
+    return
+  }
+
+  for (let i = 0; i < cola.length; i += 1) {
+    const payload = cola[i]
+    try {
+      await accionCrear(payload)
+    } catch (error) {
+      console.error(`Error al sincronizar ${tipo}`, error)
+      const pendientesRestantes = cola.slice(i)
+      guardarJson(queueKeyRegistros(tipo), pendientesRestantes)
+      actualizarPendientes(tipo)
+      return
+    }
+  }
+
+  localStorage.removeItem(queueKeyRegistros(tipo))
+  actualizarPendientes(tipo)
+  await cargarRegistros(tipo, accionListar, destino)
 }
 
 const agregarIngreso = () => agregarRegistro('ingresos', formularioIngreso, crearIngreso, ingresos)
@@ -147,7 +277,7 @@ const agregarCartera = () => agregarRegistro('cartera', formularioCartera, crear
 const seccionActiva = ref<'landing' | SeccionDetalle>('landing')
 const menuAbierto = ref(false)
 
-const irASeccion = (seccion: SeccionDetalle) => {
+const irASeccion = (seccion: SeccionDetalle | 'pendientes') => {
   seccionActiva.value = seccion
 }
 
@@ -161,8 +291,21 @@ const manejarEscape = (event: KeyboardEvent) => {
   }
 }
 
+const actualizarEstadoConexion = () => {
+  isOnline.value = navigator.onLine
+  if (isOnline.value) {
+    void sincronizarTipo('ingresos', crearIngreso, listarIngresos, ingresos)
+    void sincronizarTipo('egresos', crearEgreso, listarEgresos, egresos)
+    void sincronizarTipo('cartera', crearCartera, listarCartera, cartera)
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', manejarEscape)
+  window.addEventListener('online', actualizarEstadoConexion)
+  window.addEventListener('offline', actualizarEstadoConexion)
+  ;(['ingresos', 'egresos', 'cartera'] as SeccionDetalle[]).forEach(actualizarPendientes)
+  actualizarEstadoConexion()
   cargarCategorias()
   cargarRegistros('ingresos', listarIngresos, ingresos)
   cargarRegistros('egresos', listarEgresos, egresos)
@@ -171,6 +314,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', manejarEscape)
+  window.removeEventListener('online', actualizarEstadoConexion)
+  window.removeEventListener('offline', actualizarEstadoConexion)
 })
 
 watch(seccionActiva, () => {
@@ -355,6 +500,14 @@ const landingCards = computed(() =>
     <header class="encabezado">
       <h1>Gestión de Finanzas</h1>
       <p>Administra tus ingresos, egresos y cartera desde un solo lugar.</p>
+      <div class="encabezado__estado">
+        <span class="estado-chip" :class="isOnline ? 'estado-chip--online' : 'estado-chip--offline'">
+          {{ isOnline ? 'En línea' : 'Offline' }}
+        </span>
+        <span v-if="totalPendientes" class="estado-chip estado-chip--pendientes">
+          Pendientes: {{ totalPendientes }}
+        </span>
+      </div>
     </header>
 
     <section v-if="seccionActiva === 'landing'" class="landing" aria-label="Vistas disponibles">
@@ -556,6 +709,39 @@ const landingCards = computed(() =>
   margin: 0;
   color: #cbd5f5;
   font-size: 1.05rem;
+}
+
+.encabezado__estado {
+  display: inline-flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.estado-chip {
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.12);
+  color: #e2e8f0;
+}
+
+.estado-chip--online {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.16);
+  color: #dcfce7;
+}
+
+.estado-chip--offline {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.16);
+  color: #fee2e2;
+}
+
+.estado-chip--pendientes {
+  border-color: rgba(250, 204, 21, 0.55);
+  background: rgba(250, 204, 21, 0.14);
+  color: #fef9c3;
 }
 
 .landing .cards {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import jsPDF from 'jspdf'
 
 type Producto = {
@@ -39,6 +39,10 @@ const descuentoPct = ref(0)
 const pagoRecibido = ref(0)
 const notaRapida = ref('Venta mostrador')
 const ultimaAccion = ref('Listo para vender')
+const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+const actualizarEstadoConexion = () => {
+  isOnline.value = navigator.onLine
+}
 
 const filtrados = computed(() => {
   const termino = consulta.value.toLowerCase().trim()
@@ -58,7 +62,21 @@ const sugerencias = computed(() => {
   return filtrados.value
 })
 
+const CACHE_KEY = 'pos_productos_cache'
+
 const cargarProductos = async () => {
+  try {
+    const cache = localStorage.getItem(CACHE_KEY)
+    if (cache) {
+      const guardados = JSON.parse(cache) as Producto[]
+      if (Array.isArray(guardados) && guardados.length) {
+        productos.value = guardados
+      }
+    }
+  } catch {
+    // Ignora cache corrupto
+  }
+
   try {
     const respuesta = await fetch('http://127.0.0.1:8000/productos/')
     if (!respuesta.ok) {
@@ -67,7 +85,7 @@ const cargarProductos = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizados = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const producto = item as Record<string, unknown>
         const id = Number(producto.producto_id ?? producto.id ?? producto.pk ?? index + 1)
@@ -82,6 +100,11 @@ const cargarProductos = async () => {
       .filter(Boolean) as Producto[]
     if (normalizados.length) {
       productos.value = normalizados
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(normalizados))
+      } catch {
+        // Ignora errores de storage
+      }
     }
   } catch (error) {
     console.error('No se pudieron cargar productos', error)
@@ -90,6 +113,13 @@ const cargarProductos = async () => {
 
 onMounted(() => {
   void cargarProductos()
+  window.addEventListener('online', actualizarEstadoConexion)
+  window.addEventListener('offline', actualizarEstadoConexion)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('online', actualizarEstadoConexion)
+  window.removeEventListener('offline', actualizarEstadoConexion)
 })
 
 const normalizarDescuento = (valor: number | undefined) => Math.min(Math.max(valor ?? 0, 0), 100)
@@ -278,6 +308,9 @@ const guardarTicket = () => {
       <div class="cabecera__chips">
         <span class="chip">Caja 01</span>
         <span class="chip chip--exito">Listo para cobrar</span>
+        <span class="chip" :class="isOnline ? 'chip--online' : 'chip--offline'">
+          {{ isOnline ? 'En línea' : 'Offline' }}
+        </span>
       </div>
     </header>
 
@@ -487,6 +520,18 @@ const guardarTicket = () => {
   background: rgba(250, 204, 21, 0.14);
   border-color: rgba(250, 204, 21, 0.35);
   color: #f8fafc;
+}
+
+.chip--online {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: #dcfce7;
+}
+
+.chip--offline {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fee2e2;
 }
 
 .layout {
