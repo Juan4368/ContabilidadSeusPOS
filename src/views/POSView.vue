@@ -9,6 +9,8 @@ type Producto = {
   stock: number
   categoria: string
   destacador?: string
+  codigoBarras?: string
+  estado?: boolean
 }
 
 type ItemCarrito = {
@@ -50,9 +52,11 @@ const filtrados = computed(() => {
     const coincideTexto =
       termino === '' ||
       producto.nombre.toLowerCase().includes(termino) ||
-      producto.categoria.toLowerCase().includes(termino)
+      producto.categoria.toLowerCase().includes(termino) ||
+      (producto.codigoBarras ?? '').toLowerCase().includes(termino)
+    const estaActivo = producto.estado !== false
     const coincideCategoria = categoriaActiva.value === 'Todo' || producto.categoria === categoriaActiva.value
-    return coincideTexto && coincideCategoria
+    return coincideTexto && coincideCategoria && estaActivo
   })
 })
 
@@ -94,8 +98,20 @@ const cargarProductos = async () => {
         const stock = Number(producto.stock ?? producto.existencias ?? 0)
         const categoria = String(producto.categoria_nombre ?? producto.categoria ?? producto.category ?? 'Sin categoria')
         const destacadorRaw = producto.destacador ?? producto.badge ?? producto.etiqueta
+        const codigoBarras = producto.codigo_barras ?? producto.codigoBarras
+        const estadoRaw = producto.estado
+        const estado = typeof estadoRaw === 'boolean' ? estadoRaw : estadoRaw === 'activo'
         const destacador = destacadorRaw ? String(destacadorRaw) : undefined
-        return { id, nombre, precio, stock, categoria, destacador }
+        return {
+          id,
+          nombre,
+          precio,
+          stock,
+          categoria,
+          destacador,
+          codigoBarras: codigoBarras ? String(codigoBarras) : undefined,
+          estado
+        }
       })
       .filter(Boolean) as Producto[]
     if (normalizados.length) {
@@ -355,7 +371,7 @@ const guardarTicket = () => {
       <section class="panel productos">
         <div class="panel__encabezado">
           <div class="buscador">
-            <input v-model="consulta" type="search" placeholder="Buscar por nombre o categoría..." />
+            <input v-model="consulta" type="search" placeholder="Busque por nombre o codigo de barras..." />
             <ul v-if="sugerencias.length" class="sugerencias" role="listbox">
               <li v-for="producto in sugerencias" :key="producto.id">
                 <button type="button" class="sugerencia" @click="agregarAlCarrito(producto)">

@@ -56,7 +56,7 @@ const form = reactive({
   categoriaId: null as number | null,
   descripcion: '',
   costo: 0,
-  margen: 35,
+  margen: 0,
   iva: 0,
   creadoPorId: null as number | null,
   estado: 'activo' as 'activo' | 'inactivo'
@@ -79,14 +79,204 @@ const filaEdicion = reactive({
   estado: 'activo' as 'activo' | 'inactivo'
 })
 
-const precioVentaCalculado = computed(() => {
-  const costo = Number(form.costo || 0)
-  const margen = Number(form.margen || 0)
-  const iva = Number(form.iva || 0)
-  const precio = costo * (1 + margen / 100)
-  const precioFinal = precio * (1 + iva / 100)
-  return Math.max(precioFinal, 0)
+const precioVentaCalculado = computed({
+  get: () => {
+    const costo = Number(form.costo || 0)
+    const margenPct = Number(form.margen || 0)
+    const ivaPct = Number(form.iva || 0)
+    const precio = costo * (1 + margenPct / 100)
+    const precioFinal = precio * (1 + ivaPct / 100)
+    return Math.max(Math.round(precioFinal), 0)
+  },
+  set: (valor: number) => {
+    actualizarMargenDesdePrecio(Math.round(valor))
+  }
 })
+
+const precioVentaEdicion = computed({
+  get: () => {
+    const costo = Number(filaEdicion.costo || 0)
+    const margenPct = Number(filaEdicion.margen || 0)
+    const ivaPct = Number(filaEdicion.iva || 0)
+    const precio = costo * (1 + margenPct / 100)
+    const precioFinal = precio * (1 + ivaPct / 100)
+    return Math.max(Math.round(precioFinal), 0)
+  },
+  set: (valor: number) => {
+    actualizarMargenEdicionDesdePrecio(Math.round(valor))
+  }
+})
+
+const actualizarMargenDesdePrecio = (precioVenta: number) => {
+  const costo = Number(form.costo || 0)
+  const ivaDecimal = Number(form.iva || 0) / 100
+  const base = costo * (1 + ivaDecimal)
+  if (base <= 0) {
+    form.margen = 0
+    return
+  }
+  const margen = (precioVenta / base - 1) * 100
+  form.margen = Number(Math.max(margen, 0).toFixed(2))
+}
+
+const actualizarMargenEdicionDesdePrecio = (precioVenta: number) => {
+  const costo = Number(filaEdicion.costo || 0)
+  const ivaDecimal = Number(filaEdicion.iva || 0) / 100
+  const base = costo * (1 + ivaDecimal)
+  if (base <= 0) {
+    filaEdicion.margen = 0
+    return
+  }
+  const margen = (precioVenta / base - 1) * 100
+  filaEdicion.margen = Number(Math.max(margen, 0).toFixed(2))
+}
+
+const prepararBorrado = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  input.dataset.clearOnType = 'true'
+  input.select()
+}
+
+const borrarAlEscribir = (event: KeyboardEvent) => {
+  const input = event.target as HTMLInputElement
+  if (input.dataset.clearOnType !== 'true') return
+  if (event.key.length === 1 || event.key === 'Backspace' || event.key === 'Delete') {
+    input.value = ''
+    input.dataset.clearOnType = 'false'
+  }
+}
+
+const exportarProductos = () => {
+  const encabezados = [
+    'id',
+    'codigo_barras',
+    'nombre',
+    'categoria',
+    'costo',
+    'margen_pct',
+    'iva_pct',
+    'precio_venta',
+    'estado',
+    'fecha_actualizacion'
+  ]
+
+  const filas = productosFiltrados.value.length ? productosFiltrados.value : productos
+  const contenido = [
+    encabezados.join(','),
+    ...filas.map((producto) => {
+      const valores = [
+        producto.id,
+        producto.codigoBarras,
+        producto.nombre,
+        categoriaNombre(producto.categoriaId),
+        producto.costo,
+        (producto.margen * 100).toFixed(2),
+        (producto.iva * 100).toFixed(2),
+        producto.precioVenta,
+        producto.estado,
+        producto.fechaActualizacion
+      ]
+      return valores.map((valor) => `"${String(valor).replace(/"/g, '""')}"`).join(',')
+    })
+  ].join('\n')
+
+  const blob = new Blob([contenido], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const enlace = document.createElement('a')
+  const sello = new Date().toISOString().slice(0, 10)
+  enlace.href = url
+  enlace.download = `productos-${sello}.csv`
+  enlace.click()
+  URL.revokeObjectURL(url)
+}
+
+const eliminarProducto = async (producto: Producto) => {
+  try {
+    const respuesta = await fetch(`${API_PRODUCTOS}${producto.id}/`, { method: 'DELETE' })
+    if (!respuesta.ok && respuesta.status !== 204) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const index = productos.findIndex((item) => item.id === producto.id)
+    if (index >= 0) {
+      productos.splice(index, 1)
+    }
+  } catch (error) {
+    console.error('Error al eliminar producto', error)
+    errorForm.value = 'No fue posible eliminar el producto.'
+  }
+}
+const normalizarProducto = (item: unknown, index: number): Producto | null => {
+  if (!item || typeof item !== 'object') return null
+  const producto = item as Record<string, unknown>
+  const id = Number(producto.producto_id ?? producto.id ?? producto.pk ?? index + 1)
+  const codigoBarras = String(producto.codigo_barras ?? producto.codigoBarras ?? '')
+  const nombre = String(producto.nombre ?? producto.name ?? 'Producto')
+  const categoriaId = producto.categoria_id ?? producto.categoriaId ?? null
+  const categoriaIdNumero = categoriaId === null ? null : Number(categoriaId)
+  const descripcion = String(producto.descripcion ?? '')
+  const costo = Number(producto.costo ?? 0)
+        const margen = Number(producto.margen ?? 0)
+        const iva = Number(producto.iva ?? 0)
+  const precioVenta = Number(producto.precio_venta ?? producto.precioVenta ?? producto.precio ?? 0)
+  const creadoPorId = producto.creado_por_id ?? producto.creadoPorId ?? null
+  const actualizadoPorId = producto.actualizado_por_id ?? producto.actualizadoPorId ?? null
+  const fechaCreacion = String(producto.fecha_creacion ?? producto.fechaCreacion ?? '')
+  const fechaActualizacion = String(producto.fecha_actualizacion ?? producto.fechaActualizacion ?? '')
+  const estadoRaw = producto.estado
+  const estado =
+    estadoRaw === false || estadoRaw === 'inactivo' ? 'inactivo' : estadoRaw === 'activo' ? 'activo' : 'activo'
+
+  return {
+    id,
+    codigoBarras,
+    nombre,
+    categoriaId: categoriaIdNumero,
+    descripcion,
+    costo,
+          margen,
+    iva,
+    precioVenta,
+    creadoPorId: creadoPorId === null ? null : Number(creadoPorId),
+    actualizadoPorId: actualizadoPorId === null ? null : Number(actualizadoPorId),
+    fechaCreacion,
+    fechaActualizacion,
+    estado
+  }
+}
+
+const requestProducto = async (method: string, id: number, payload: Record<string, unknown>) => {
+  const respuesta = await fetch(`${API_PRODUCTOS}${id}/`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text().catch(() => '')
+    const error = new Error(detalle || `Error ${respuesta.status}`)
+    ;(error as Error & { status?: number }).status = respuesta.status
+    throw error
+  }
+
+  return (await respuesta.json()) as unknown
+}
+
+const actualizarProductoApi = async (
+  id: number,
+  payload: Record<string, unknown>,
+  fallbackPayload?: Record<string, unknown>
+) => {
+  try {
+    return await requestProducto('PATCH', id, payload)
+  } catch (error) {
+    const status = (error as Error & { status?: number }).status
+    if (fallbackPayload && (status === 404 || status === 405)) {
+      return await requestProducto('PUT', id, fallbackPayload)
+    }
+    throw error
+  }
+}
 
 const cargarProductos = async () => {
   try {
@@ -100,51 +290,18 @@ const cargarProductos = async () => {
     const categoriasMap = new Map<number, string>()
     const normalizados = lista
       .map((item, index) => {
-        if (!item || typeof item !== 'object') return null
-        const producto = item as Record<string, unknown>
-        const id = Number(producto.producto_id ?? producto.id ?? producto.pk ?? index + 1)
-        const codigoBarras = String(producto.codigo_barras ?? producto.codigoBarras ?? '')
-        const nombre = String(producto.nombre ?? producto.name ?? 'Producto')
-        const categoriaId = producto.categoria_id ?? producto.categoriaId ?? null
-        const categoriaIdNumero = categoriaId === null ? null : Number(categoriaId)
-        const descripcion = String(producto.descripcion ?? '')
-        const costo = Number(producto.costo ?? 0)
-        const margen = Number(producto.margen ?? 0)
-        const iva = Number(producto.iva ?? 0)
-        const precioVenta = Number(producto.precio_venta ?? producto.precioVenta ?? producto.precio ?? 0)
-        const creadoPorId = producto.creado_por_id ?? producto.creadoPorId ?? null
-        const actualizadoPorId = producto.actualizado_por_id ?? producto.actualizadoPorId ?? null
-        const fechaCreacion = String(producto.fecha_creacion ?? producto.fechaCreacion ?? '')
-        const fechaActualizacion = String(producto.fecha_actualizacion ?? producto.fechaActualizacion ?? '')
-        const estadoRaw = producto.estado
-        const estado =
-          estadoRaw === false || estadoRaw === 'inactivo' ? 'inactivo' : estadoRaw === 'activo' ? 'activo' : 'activo'
-        const categoriaNombre = producto.categoria_nombre ?? producto.categoriaNombre
-        if (categoriaIdNumero !== null) {
+        const normalizado = normalizarProducto(item, index)
+        if (!normalizado) return null
+        const categoriaNombre = (item as Record<string, unknown>).categoria_nombre ?? (item as Record<string, unknown>).categoriaNombre
+        if (normalizado.categoriaId !== null) {
           categoriasMap.set(
-            categoriaIdNumero,
+            normalizado.categoriaId,
             typeof categoriaNombre === 'string' && categoriaNombre.trim()
               ? categoriaNombre
-              : `Categoria ${categoriaIdNumero}`
+              : `Categoria ${normalizado.categoriaId}`
           )
         }
-
-        return {
-          id,
-          codigoBarras,
-          nombre,
-          categoriaId: categoriaIdNumero,
-          descripcion,
-          costo,
-          margen,
-          iva,
-          precioVenta,
-          creadoPorId: creadoPorId === null ? null : Number(creadoPorId),
-          actualizadoPorId: actualizadoPorId === null ? null : Number(actualizadoPorId),
-          fechaCreacion,
-          fechaActualizacion,
-          estado
-        }
+        return normalizado
       })
       .filter(Boolean) as Producto[]
 
@@ -204,13 +361,13 @@ const resetForm = () => {
   form.categoriaId = null
   form.descripcion = ''
   form.costo = 0
-  form.margen = 35
+  form.margen = 0
   form.iva = 0
   form.creadoPorId = null
   form.estado = 'activo'
 }
 
-const crearProducto = () => {
+const crearProducto = async () => {
   errorForm.value = ''
   const nombre = form.nombre.trim()
   const codigoBarras = form.codigoBarras.trim()
@@ -220,26 +377,41 @@ const crearProducto = () => {
     return
   }
 
-  const ahora = new Date().toISOString().slice(0, 16).replace('T', ' ')
-  productos.push({
-    id: Date.now(),
-    codigoBarras,
+  const payload = {
+    codigo_barras: codigoBarras,
     nombre,
-    categoriaId: form.categoriaId,
+    categoria_id: form.categoriaId,
     descripcion: form.descripcion.trim(),
     costo: Number(form.costo || 0),
-    margen: Number(form.margen || 0),
-    iva: Number(form.iva || 0),
-    precioVenta: Number(precioVentaCalculado.value.toFixed(0)),
-    creadoPorId: form.creadoPorId,
-    actualizadoPorId: form.creadoPorId,
-    fechaCreacion: ahora,
-    fechaActualizacion: ahora,
-    estado: form.estado
-  })
+    margen: Number(form.margen || 0) / 100,
+    iva: Number(form.iva || 0) / 100,
+    precio_venta: Number(precioVentaCalculado.value.toFixed(0)),
+    creado_por_id: form.creadoPorId ?? null,
+    actualizado_por_id: form.creadoPorId ?? null,
+    estado: form.estado === 'activo'
+  }
 
-  resetForm()
-  mostrarFormulario.value = false
+  try {
+    const respuesta = await fetch(API_PRODUCTOS, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const normalizado = normalizarProducto(data, productos.length)
+    if (normalizado) {
+      productos.unshift(normalizado)
+    }
+    resetForm()
+    mostrarFormulario.value = false
+  } catch (error) {
+    console.error('Error al crear producto', error)
+    errorForm.value = 'No fue posible crear el producto.'
+  }
 }
 
 const iniciarEdicionFila = (producto: Producto) => {
@@ -249,8 +421,8 @@ const iniciarEdicionFila = (producto: Producto) => {
   filaEdicion.categoriaId = producto.categoriaId
   filaEdicion.descripcion = producto.descripcion
   filaEdicion.costo = producto.costo
-  filaEdicion.margen = producto.margen
-  filaEdicion.iva = producto.iva
+  filaEdicion.margen = producto.margen * 100
+  filaEdicion.iva = producto.iva * 100
   filaEdicion.estado = producto.estado
 }
 
@@ -258,7 +430,7 @@ const cancelarEdicionFila = () => {
   filaEdicionId.value = null
 }
 
-const guardarEdicionFila = (producto: Producto) => {
+const guardarEdicionFila = async (producto: Producto) => {
   const nombre = filaEdicion.nombre.trim()
   const codigoBarras = filaEdicion.codigoBarras.trim()
 
@@ -267,28 +439,89 @@ const guardarEdicionFila = (producto: Producto) => {
     return
   }
 
-  producto.codigoBarras = codigoBarras
-  producto.nombre = nombre
-  producto.categoriaId = filaEdicion.categoriaId
-  producto.descripcion = filaEdicion.descripcion.trim()
-  producto.costo = Number(filaEdicion.costo || 0)
-  producto.margen = Number(filaEdicion.margen || 0)
-  producto.iva = Number(filaEdicion.iva || 0)
-  producto.precioVenta = Number(
-    (producto.costo * (1 + producto.margen / 100) * (1 + producto.iva / 100)).toFixed(0)
-  )
-  producto.actualizadoPorId = producto.creadoPorId
-  producto.fechaActualizacion = new Date().toISOString().slice(0, 16).replace('T', ' ')
-  producto.estado = filaEdicion.estado
+  const actualizado = new Date().toISOString()
+  const payload = {
+    codigo_barras: codigoBarras,
+    nombre,
+    categoria_id: filaEdicion.categoriaId,
+    descripcion: filaEdicion.descripcion.trim(),
+    costo: Number(filaEdicion.costo || 0),
+    margen: Number(filaEdicion.margen || 0) / 100,
+    iva: Number(filaEdicion.iva || 0) / 100,
+    precio_venta: Number(
+      (
+        Number(filaEdicion.costo || 0) *
+        (1 + Number(filaEdicion.margen || 0) / 100) *
+        (1 + Number(filaEdicion.iva || 0) / 100)
+      ).toFixed(0)
+    ),
+    estado: filaEdicion.estado === 'activo'
+  }
+  const payloadCompleto = {
+    ...payload,
+    creado_por_id: producto.creadoPorId ?? null,
+    actualizado_por_id: producto.actualizadoPorId ?? producto.creadoPorId ?? null
+  }
 
-  filaEdicionId.value = null
+  try {
+    const respuesta = await actualizarProductoApi(producto.id, payload, payloadCompleto)
+    const normalizado = normalizarProducto(respuesta, 0)
+    if (normalizado) {
+      Object.assign(producto, normalizado)
+    } else {
+      producto.codigoBarras = codigoBarras
+      producto.nombre = nombre
+      producto.categoriaId = filaEdicion.categoriaId
+      producto.descripcion = filaEdicion.descripcion.trim()
+      producto.costo = Number(filaEdicion.costo || 0)
+      producto.margen = Number(filaEdicion.margen || 0) / 100
+      producto.iva = Number(filaEdicion.iva || 0) / 100
+      producto.precioVenta = Number(payload.precio_venta)
+      producto.actualizadoPorId = producto.creadoPorId
+      producto.fechaActualizacion = actualizado
+      producto.estado = filaEdicion.estado
+    }
+    filaEdicionId.value = null
+  } catch (error) {
+    console.error('Error al actualizar producto', error)
+    errorForm.value = 'No fue posible actualizar el producto.'
+  }
 }
 
-const toggleEstado = (id: number) => {
+const toggleEstado = async (id: number) => {
   const item = productos.find((producto) => producto.id === id)
   if (!item) return
-  item.estado = item.estado === 'activo' ? 'inactivo' : 'activo'
+  const estadoAnterior = item.estado
+  const nuevoEstado = item.estado === 'activo' ? 'inactivo' : 'activo'
+  item.estado = nuevoEstado
   item.fechaActualizacion = new Date().toISOString().slice(0, 16).replace('T', ' ')
+
+  const payload = { estado: nuevoEstado === 'activo' }
+  const payloadCompleto = {
+    codigo_barras: item.codigoBarras,
+    nombre: item.nombre,
+    categoria_id: item.categoriaId,
+    descripcion: item.descripcion,
+    costo: item.costo,
+    margen: item.margen,
+    iva: item.iva,
+    precio_venta: item.precioVenta,
+    estado: nuevoEstado === 'activo',
+    creado_por_id: item.creadoPorId ?? null,
+    actualizado_por_id: item.actualizadoPorId ?? item.creadoPorId ?? null
+  }
+
+  try {
+    const respuesta = await actualizarProductoApi(item.id, payload, payloadCompleto)
+    const normalizado = normalizarProducto(respuesta, 0)
+    if (normalizado) {
+      Object.assign(item, normalizado)
+    }
+  } catch (error) {
+    console.error('Error al cambiar estado', error)
+    item.estado = estadoAnterior
+    errorForm.value = 'No fue posible actualizar el estado.'
+  }
 }
 
 const categoriaNombre = (id: number | null) =>
@@ -304,7 +537,7 @@ const categoriaNombre = (id: number | null) =>
         <p class="productos__nota">Gestiona el catalogo y los precios de venta.</p>
       </div>
       <div class="productos__acciones">
-        <button type="button" class="boton secundaria">Exportar</button>
+        <button type="button" class="boton secundaria" @click="exportarProductos">Exportar</button>
         <button type="button" class="boton" @click="mostrarFormulario = true">Nuevo producto</button>
       </div>
     </header>
@@ -335,7 +568,7 @@ const categoriaNombre = (id: number | null) =>
     <section class="panel filtros">
       <label class="campo">
         <span>Buscar</span>
-        <input v-model="filtroTexto" type="search" placeholder="Nombre, codigo o categoria" />
+        <input v-model="filtroTexto" type="search" placeholder="Busque por nombre o codigo de barras" />
       </label>
       <label class="campo">
         <span>Categoria</span>
@@ -355,7 +588,7 @@ const categoriaNombre = (id: number | null) =>
       </label>
     </section>
 
-    <section v-if="mostrarFormulario" class="formulario-modal" @click.self="mostrarFormulario = false">
+    <section v-if="mostrarFormulario" class="formulario-modal">
       <div class="panel form-panel">
         <header class="panel__cabecera">
           <h2>Crear producto</h2>
@@ -365,11 +598,23 @@ const categoriaNombre = (id: number | null) =>
         <form class="form" @submit.prevent="crearProducto">
           <label>
             <span>Codigo de barras</span>
-            <input v-model="form.codigoBarras" type="text" placeholder="7701234500019" />
+            <input
+              v-model="form.codigoBarras"
+              type="text"
+              placeholder="7701234500019"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
             <span>Nombre</span>
-            <input v-model="form.nombre" type="text" placeholder="Producto" />
+            <input
+              v-model="form.nombre"
+              type="text"
+              placeholder="Producto"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
             <span>Categoria</span>
@@ -382,27 +627,68 @@ const categoriaNombre = (id: number | null) =>
           </label>
           <label>
             <span>Descripcion</span>
-            <input v-model="form.descripcion" type="text" placeholder="Opcional" />
+            <input
+              v-model="form.descripcion"
+              type="text"
+              placeholder="Opcional"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
             <span>Costo</span>
-            <input v-model.number="form.costo" type="number" min="0" step="1" />
+            <input
+              v-model.number="form.costo"
+              type="number"
+              min="0"
+              step="1"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
             <span>Margen %</span>
-            <input v-model.number="form.margen" type="number" min="0" step="1" />
+            <input
+              v-model.number="form.margen"
+              type="number"
+              min="0"
+              step="1"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
             <span>IVA %</span>
-            <input v-model.number="form.iva" type="number" min="0" step="0.01" />
+            <input
+              v-model.number="form.iva"
+              type="number"
+              min="0"
+              step="0.01"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
-            <span>Precio venta (calculado)</span>
-            <input :value="formatCurrency(precioVentaCalculado)" type="text" readonly />
+            <span>Precio venta</span>
+            <input
+              v-model.number="precioVentaCalculado"
+              type="number"
+              min="0"
+              step="1"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
             <span>Creado por (id)</span>
-            <input v-model.number="form.creadoPorId" type="number" min="0" step="1" />
+            <input
+              v-model.number="form.creadoPorId"
+              type="number"
+              min="0"
+              step="1"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </label>
           <label>
             <span>Estado</span>
@@ -422,6 +708,7 @@ const categoriaNombre = (id: number | null) =>
         <h2>Listado de productos</h2>
         <span>{{ productosFiltrados.length }} resultados</span>
       </header>
+      <p v-if="errorForm" class="error">{{ errorForm }}</p>
 
       <div class="tabla__grid">
         <div class="tabla__fila tabla__encabezado">
@@ -443,9 +730,27 @@ const categoriaNombre = (id: number | null) =>
         >
           <div class="producto">
             <div v-if="filaEdicionId === producto.id" class="producto__edicion">
-              <input v-model="filaEdicion.nombre" type="text" placeholder="Nombre" />
-              <input v-model="filaEdicion.codigoBarras" type="text" placeholder="Codigo barras" />
-              <input v-model="filaEdicion.descripcion" type="text" placeholder="Descripcion" />
+              <input
+                v-model="filaEdicion.nombre"
+                type="text"
+                placeholder="Nombre"
+                @focus="prepararBorrado"
+                @keydown="borrarAlEscribir"
+              />
+              <input
+                v-model="filaEdicion.codigoBarras"
+                type="text"
+                placeholder="Codigo barras"
+                @focus="prepararBorrado"
+                @keydown="borrarAlEscribir"
+              />
+              <input
+                v-model="filaEdicion.descripcion"
+                type="text"
+                placeholder="Descripcion"
+                @focus="prepararBorrado"
+                @keydown="borrarAlEscribir"
+              />
             </div>
             <div v-else>
               <p class="producto__nombre">{{ producto.nombre }}</p>
@@ -462,24 +767,49 @@ const categoriaNombre = (id: number | null) =>
           </span>
           <span v-else>{{ categoriaNombre(producto.categoriaId) }}</span>
           <span v-if="filaEdicionId === producto.id">
-            <input v-model.number="filaEdicion.costo" type="number" min="0" step="1" />
+            <input
+              v-model.number="filaEdicion.costo"
+              type="number"
+              min="0"
+              step="1"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </span>
           <span v-else>{{ formatCurrency(producto.costo) }}</span>
           <span v-if="filaEdicionId === producto.id">
-            <input v-model.number="filaEdicion.margen" type="number" min="0" step="1" />
+            <input
+              v-model.number="filaEdicion.margen"
+              type="number"
+              min="0"
+              step="1"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </span>
-          <span v-else>{{ producto.margen }}%</span>
+        <span v-else>{{ (producto.margen * 100).toFixed(2).replace(/\.00$/, '') }}%</span>
           <span v-if="filaEdicionId === producto.id">
-            <input v-model.number="filaEdicion.iva" type="number" min="0" step="0.01" />
+            <input
+              v-model.number="filaEdicion.iva"
+              type="number"
+              min="0"
+              step="0.01"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </span>
-          <span v-else>{{ producto.iva }}%</span>
-          <span class="precio">
-            {{
-              filaEdicionId === producto.id
-                ? formatCurrency(filaEdicion.costo * (1 + filaEdicion.margen / 100) * (1 + filaEdicion.iva / 100))
-                : formatCurrency(producto.precioVenta)
-            }}
+        <span v-else>{{ (producto.iva * 100).toFixed(2).replace(/\.00$/, '') }}%</span>
+          <span v-if="filaEdicionId === producto.id">
+            <input
+              v-model.number="precioVentaEdicion"
+              type="number"
+              min="0"
+              step="1"
+              @focus="prepararBorrado"
+              @keydown="borrarAlEscribir"
+            />
           </span>
+          <span v-else class="precio">{{ formatCurrency(producto.precioVenta) }}</span>
           <span v-if="filaEdicionId === producto.id">
             <select v-model="filaEdicion.estado">
               <option value="activo">Activo</option>
@@ -544,6 +874,20 @@ const categoriaNombre = (id: number | null) =>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path
                     d="M13 3h-2v10h2V3zm-1 18c-4.4 0-8-3.6-8-8 0-3.1 1.8-5.8 4.5-7V3.3C4.5 4.9 2 8.4 2 13c0 5.5 4.5 10 10 10s10-4.5 10-10c0-4.6-2.5-8.1-6.5-9.7V6c2.7 1.2 4.5 3.9 4.5 7 0 4.4-3.6 8-8 8z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="icono icono--peligro"
+                data-label="Eliminar"
+                aria-label="Eliminar"
+                @click="eliminarProducto(producto)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M6 7h12l-1 14H7L6 7zm4-3h4l1 2H9l1-2z"
                     fill="currentColor"
                   />
                 </svg>
@@ -883,6 +1227,18 @@ const categoriaNombre = (id: number | null) =>
   background: rgba(250, 204, 21, 0.16);
   transform: translateY(-1px);
   outline: none;
+}
+
+.icono--peligro {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+}
+
+.icono--peligro:hover,
+.icono--peligro:focus-visible {
+  border-color: rgba(239, 68, 68, 0.8);
+  background: rgba(239, 68, 68, 0.2);
 }
 
 .icono::after {
