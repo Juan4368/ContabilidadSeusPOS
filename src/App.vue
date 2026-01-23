@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import FinanzasView from './views/FinanzasView.vue'
 import POSView from './views/POSView.vue'
@@ -7,8 +7,9 @@ import StockView from './views/StockView.vue'
 import AdminView from './views/AdminView.vue'
 import ProductosView from './views/ProductosView.vue'
 import PendientesView from './views/PendientesView.vue'
+import VentasPendientesView from './views/VentasPendientesView.vue'
 
-type VistaId = 'pos' | 'finanzas' | 'stock' | 'admin' | 'productos' | 'pendientes'
+type VistaId = 'pos' | 'finanzas' | 'stock' | 'admin' | 'productos' | 'pendientes' | 'ventas-pendientes'
 
 const vistaActiva = ref<VistaId>('pos')
 
@@ -18,10 +19,26 @@ const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componen
   { id: 'stock', nombre: 'Stock', descripcion: 'Inventario y reposicion', componente: StockView },
   { id: 'admin', nombre: 'Admin', descripcion: 'Usuarios y categorias', componente: AdminView },
   { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView },
-  { id: 'pendientes', nombre: 'Pendientes', descripcion: 'Registros offline', componente: PendientesView }
+  { id: 'pendientes', nombre: 'Pendientes', descripcion: 'Registros offline', componente: PendientesView },
+  { id: 'ventas-pendientes', nombre: 'Ventas pendientes', descripcion: 'Recuperar ventas', componente: VentasPendientesView }
 ]
 
 const componenteActual = computed(() => vistas.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView)
+
+const cambiarVista = (event: Event) => {
+  const detalle = (event as CustomEvent<{ vista: VistaId }>).detail
+  if (detalle?.vista) {
+    vistaActiva.value = detalle.vista
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('app:cambiar-vista', cambiarVista as EventListener)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('app:cambiar-vista', cambiarVista as EventListener)
+})
 </script>
 
 <template>

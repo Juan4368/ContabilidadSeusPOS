@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 type Usuario = {
   id: number
@@ -14,27 +14,78 @@ type Categoria = {
   descripcion: string
 }
 
-const usuarios = reactive<Usuario[]>([
-  { id: 1, nombre: 'Ana Perez', email: 'ana@empresa.com', estado: 'activo' },
-  { id: 2, nombre: 'Luis Gomez', email: 'luis@empresa.com', estado: 'activo' }
-])
+type Cliente = {
+  id: string
+  nombre: string
+  telefono: string
+  email: string
+  createdAt: string
+}
+
+const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
+
+const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
+
+const usuarios = reactive<Usuario[]>([])
 
 const categorias = reactive<Categoria[]>([
   { id: 1, nombre: 'Bebidas', descripcion: 'Cafe, te, jugos' },
   { id: 2, nombre: 'Snacks', descripcion: 'Sandwiches y panaderia' }
 ])
 
-const usuarioForm = reactive({ nombre: '', email: '' })
+const clientes = reactive<Cliente[]>([])
+
+const usuarioForm = reactive({
+  nombre: '',
+  email: '',
+  contrasena: '',
+  numeroContacto: '',
+  role: 'administrador',
+  activo: true
+})
 const categoriaForm = reactive({ nombre: '', descripcion: '' })
+const clienteForm = reactive({ nombre: '', telefono: '', email: '' })
 
 const errorUsuario = ref('')
 const errorCategoria = ref('')
+const errorCliente = ref('')
 
 const usuariosActivos = computed(() => usuarios.filter((usuario) => usuario.estado === 'activo').length)
+const totalClientes = computed(() => clientes.length)
+
+const cargarUsuarios = async () => {
+  try {
+    const respuesta = await fetch(USUARIOS_ENDPOINT)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const normalizados = lista
+      .map((item, index) => {
+        if (!item || typeof item !== 'object') return null
+        const usuario = item as Record<string, unknown>
+        const id = Number(usuario.user_id ?? usuario.id ?? index + 1)
+        const nombre = String(usuario.nombre_completo ?? usuario.nombre ?? 'Usuario')
+        const email = String(usuario.correo ?? usuario.email ?? '')
+        const activoRaw = usuario.activo
+        const estado = activoRaw === false ? 'inactivo' : 'activo'
+        return { id, nombre, email, estado } as Usuario
+      })
+      .filter(Boolean) as Usuario[]
+    usuarios.splice(0, usuarios.length, ...normalizados)
+  } catch (error) {
+    console.error('No se pudieron cargar usuarios', error)
+  }
+}
 
 const limpiarUsuario = () => {
   usuarioForm.nombre = ''
   usuarioForm.email = ''
+  usuarioForm.contrasena = ''
+  usuarioForm.numeroContacto = ''
+  usuarioForm.role = 'administrador'
+  usuarioForm.activo = true
 }
 
 const limpiarCategoria = () => {
@@ -42,29 +93,84 @@ const limpiarCategoria = () => {
   categoriaForm.descripcion = ''
 }
 
-const crearUsuario = () => {
+const limpiarCliente = () => {
+  clienteForm.nombre = ''
+  clienteForm.telefono = ''
+  clienteForm.email = ''
+}
+
+const cargarClientes = async () => {
+  try {
+    const respuesta = await fetch(CLIENTES_ENDPOINT)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const normalizados = lista
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const cliente = item as Record<string, unknown>
+        return {
+          id: String(cliente.id ?? cliente.cliente_id ?? ''),
+          nombre: String(cliente.nombre ?? ''),
+          telefono: String(cliente.telefono ?? ''),
+          email: String(cliente.email ?? ''),
+          createdAt: String(cliente.created_at ?? cliente.createdAt ?? '')
+        }
+      })
+      .filter(Boolean) as Cliente[]
+    clientes.splice(0, clientes.length, ...normalizados)
+  } catch (error) {
+    console.error('No se pudieron cargar clientes', error)
+  }
+}
+
+const crearUsuario = async () => {
   errorUsuario.value = ''
   const nombre = usuarioForm.nombre.trim()
   const email = usuarioForm.email.trim().toLowerCase()
+  const contrasena = usuarioForm.contrasena.trim()
+  const numeroContacto = usuarioForm.numeroContacto.trim()
 
-  if (!nombre || !email) {
-    errorUsuario.value = 'Completa nombre y email.'
+  if (!nombre || !email || !contrasena || !numeroContacto) {
+    errorUsuario.value = 'Completa nombre, email, contraseña y contacto.'
     return
   }
 
-  if (usuarios.some((usuario) => usuario.email === email)) {
-    errorUsuario.value = 'El email ya existe.'
-    return
+  try {
+    const payload = {
+      correo: email,
+      contrasena_hash: contrasena,
+      numero_contacto: numeroContacto,
+      role: usuarioForm.role,
+      activo: usuarioForm.activo,
+      nombre_completo: nombre,
+      creado_at: new Date().toISOString(),
+      actualizado_at: new Date().toISOString()
+    }
+
+    const respuesta = await fetch(USUARIOS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json()) as Record<string, unknown>
+    usuarios.unshift({
+      id: Number(data.user_id ?? data.id ?? Date.now()),
+      nombre: String(data.nombre_completo ?? nombre),
+      email: String(data.correo ?? email),
+      estado: data.activo === false ? 'inactivo' : 'activo'
+    })
+    limpiarUsuario()
+  } catch (error) {
+    console.error('Error al crear usuario', error)
+    errorUsuario.value = 'No fue posible crear el usuario.'
   }
-
-  usuarios.push({
-    id: Date.now(),
-    nombre,
-    email,
-    estado: 'activo'
-  })
-
-  limpiarUsuario()
 }
 
 const crearCategoria = () => {
@@ -86,16 +192,76 @@ const crearCategoria = () => {
   limpiarCategoria()
 }
 
-const toggleEstado = (id: number) => {
+const crearCliente = async () => {
+  errorCliente.value = ''
+  const nombre = clienteForm.nombre.trim()
+  const telefono = clienteForm.telefono.trim()
+  const email = clienteForm.email.trim().toLowerCase()
+
+  if (!nombre || !telefono || !email) {
+    errorCliente.value = 'Completa nombre, telefono y email.'
+    return
+  }
+
+  try {
+    const respuesta = await fetch(CLIENTES_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, telefono, email })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json()) as Record<string, unknown>
+    const nuevo: Cliente = {
+      id: String(data.id ?? data.cliente_id ?? Date.now()),
+      nombre: String(data.nombre ?? nombre),
+      telefono: String(data.telefono ?? telefono),
+      email: String(data.email ?? email),
+      createdAt: String(data.created_at ?? new Date().toISOString())
+    }
+    clientes.unshift(nuevo)
+    limpiarCliente()
+  } catch (error) {
+    console.error('Error al crear cliente', error)
+    errorCliente.value = 'No fue posible crear el cliente.'
+  }
+}
+
+const toggleEstado = async (id: number) => {
   const usuario = usuarios.find((item) => item.id === id)
   if (!usuario) return
-  usuario.estado = usuario.estado === 'activo' ? 'inactivo' : 'activo'
+  const estadoAnterior = usuario.estado
+  const nuevoEstado = usuario.estado === 'activo' ? 'inactivo' : 'activo'
+  usuario.estado = nuevoEstado
+
+  try {
+    const respuesta = await fetch(`${USUARIOS_ENDPOINT}${id}/estado`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activo: nuevoEstado === 'activo' })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+  } catch (error) {
+    console.error('Error al actualizar estado', error)
+    usuario.estado = estadoAnterior
+    errorUsuario.value = 'No fue posible actualizar el estado.'
+  }
 }
 
 const eliminarCategoria = (id: number) => {
   const index = categorias.findIndex((item) => item.id === id)
   if (index >= 0) categorias.splice(index, 1)
 }
+
+onMounted(() => {
+  void cargarClientes()
+  void cargarUsuarios()
+})
 </script>
 
 <template>
@@ -110,6 +276,7 @@ const eliminarCategoria = (id: number) => {
         <span>Total usuarios: {{ usuarios.length }}</span>
         <span>Activos: {{ usuariosActivos }}</span>
         <span>Total categorias: {{ categorias.length }}</span>
+        <span>Total clientes: {{ totalClientes }}</span>
       </div>
     </header>
 
@@ -128,6 +295,29 @@ const eliminarCategoria = (id: number) => {
           <label>
             <span>Email</span>
             <input v-model="usuarioForm.email" type="email" placeholder="correo@empresa.com" />
+          </label>
+          <label>
+            <span>Contacto</span>
+            <input v-model="usuarioForm.numeroContacto" type="text" placeholder="3001234567" />
+          </label>
+          <label>
+            <span>Contraseña</span>
+            <input v-model="usuarioForm.contrasena" type="password" placeholder="••••••••" />
+          </label>
+          <label>
+            <span>Rol</span>
+            <select v-model="usuarioForm.role">
+              <option value="administrador">Administrador</option>
+              <option value="cajero">Cajero</option>
+              <option value="supervisor">Supervisor</option>
+            </select>
+          </label>
+          <label>
+            <span>Estado</span>
+            <select v-model="usuarioForm.activo">
+              <option :value="true">Activo</option>
+              <option :value="false">Inactivo</option>
+            </select>
           </label>
           <button type="submit">Crear usuario</button>
           <p v-if="errorUsuario" class="error">{{ errorUsuario }}</p>
@@ -176,6 +366,42 @@ const eliminarCategoria = (id: number) => {
             </div>
             <div class="acciones">
               <button type="button" class="secundario" @click="eliminarCategoria(categoria.id)">Eliminar</button>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel__cabecera">
+          <h2>Clientes</h2>
+          <p>Gestiona clientes para facturacion y seguimiento.</p>
+        </header>
+
+        <form class="form" @submit.prevent="crearCliente">
+          <label>
+            <span>Nombre</span>
+            <input v-model="clienteForm.nombre" type="text" placeholder="Nombre completo" />
+          </label>
+          <label>
+            <span>Telefono</span>
+            <input v-model="clienteForm.telefono" type="text" placeholder="3001234567" />
+          </label>
+          <label>
+            <span>Email</span>
+            <input v-model="clienteForm.email" type="email" placeholder="cliente@correo.com" />
+          </label>
+          <button type="submit">Crear cliente</button>
+          <p v-if="errorCliente" class="error">{{ errorCliente }}</p>
+        </form>
+
+        <ul class="lista">
+          <li v-for="cliente in clientes" :key="cliente.id">
+            <div>
+              <strong>{{ cliente.nombre }}</strong>
+              <small>{{ cliente.telefono }} · {{ cliente.email }}</small>
+            </div>
+            <div class="acciones">
+              <span class="estado">{{ cliente.createdAt ? 'Registrado' : 'Nuevo' }}</span>
             </div>
           </li>
         </ul>
