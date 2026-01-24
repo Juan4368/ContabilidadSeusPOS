@@ -7,14 +7,22 @@ export interface Registro {
   fecha: string
   notas: string
   categoriaMarkdown?: string | null
+  cliente?: string
+  tipo_ingreso?: string
+  tipo_egreso?: string
 }
 
 export interface RegistroPayload {
   monto: number
-  categoriaId: number
+  categoriaId?: number
+  categoria_id?: number
+  categoria_contabilidad_id?: number
   fecha: string
   notas: string
   categoriaMarkdown?: string | null
+  cliente?: string
+  tipo_egreso?: string
+  tipo_ingreso?: string
 }
 
 export interface Categoria {

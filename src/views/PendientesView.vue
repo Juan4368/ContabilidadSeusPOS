@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { crearCartera } from '../services/cartera'
-import { crearEgreso } from '../services/egresos'
 import { crearIngreso } from '../services/ingresos'
 import type { Categoria, RegistroPayload, TipoRegistro } from '../services/tipos'
 
@@ -15,7 +14,7 @@ type PendienteItem = {
 
 const CACHE_CATEGORIAS_KEY = 'finanzas_categorias_cache'
 const queueKeyRegistros = (tipo: TipoRegistro) => `finanzas_${tipo}_queue`
-const tipos: TipoRegistro[] = ['ingresos', 'egresos', 'cartera']
+const tipos: TipoRegistro[] = ['ingresos', 'cartera']
 
 const pendientes = ref<PendienteItem[]>([])
 const categorias = ref<Categoria[]>([])
@@ -89,7 +88,6 @@ const sincronizarTodo = async () => {
 
   try {
     await sincronizarCola('ingresos', crearIngreso)
-    await sincronizarCola('egresos', crearEgreso)
     await sincronizarCola('cartera', crearCartera)
     cargarPendientes()
     syncMensaje.value = 'Sincronización completa.'

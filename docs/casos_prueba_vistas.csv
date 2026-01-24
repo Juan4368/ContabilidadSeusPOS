@@ -1,0 +1,43 @@
+ID,Vista,Caso,Precondiciones,Pasos,Resultado esperado,Notas
+POS-001,POS,Carga productos activos,API /productos responde con datos,"1. Abrir vista POS
+2. Esperar carga de productos",Se muestran productos activos y categorias,Endpoint http://127.0.0.1:8000/productos/
+POS-002,POS,Busqueda por nombre/codigo,Productos cargados,"1. Escribir nombre parcial en buscador
+2. Escribir codigo de barras",Lista sugiere coincidencias por nombre o codigo,Placeholder correcto
+POS-003,POS,Agregar producto al carrito,Productos cargados,"1. Clic en sugerencia
+2. Ver carrito",Producto aparece en carrito con cantidad 1,
+POS-004,POS,Eliminar producto del carrito,Carrito con items,1. Clic en X eliminar,Item se elimina,
+POS-005,POS,Actualizar cantidad,Carrito con item,1. Clic + y -,Cantidad cambia y total recalcula,
+POS-006,POS,Guardar venta pendiente,Carrito con items,1. Clic Guardar venta,Venta se guarda en pendientes (localStorage),pos_ventas_pendientes
+POS-007,POS,Cobrar F10,Carrito con items y cliente/usuario seleccionados,1. Presionar F10,Venta se env?a al API y se limpia carrito,/ventas/
+POS-008,POS,Seleccionar cliente generico por defecto,Clientes cargados,1. Abrir POS,Selector muestra Generico por defecto,/clientes/
+POS-009,POS,Mostrar payload de venta,Carrito con items,"1. Clic Cobrar
+2. Ver payload",Payload visible en UI,
+POS-010,POS,Ticket PDF,Carrito con items,1. Clic Guardar PDF,Se descarga PDF del ticket,jsPDF
+VP-001,Ventas pendientes,Listar ventas pendientes,Existen ventas pendientes,1. Abrir vista Ventas pendientes,"Se muestran id, cliente, fecha, total",localStorage
+VP-002,Ventas pendientes,Abrir venta pendiente,Existen ventas pendientes,1. Clic sobre una venta,Se abre en POS con items cargados,evento pos:cargar-pendiente
+PROD-001,Productos,Cargar productos,API /productos responde,1. Abrir vista Productos,Listado con productos y conteos,/productos/
+PROD-002,Productos,Buscar por nombre/codigo,Productos cargados,1. Escribir en buscador,Listado filtra solo coincidencias,
+PROD-003,Productos,Crear producto,Datos validos,"1. Abrir formulario
+2. Guardar",Producto creado via POST,/productos/
+PROD-004,Productos,Editar producto,Producto existente,"1. Clic Editar
+2. Cambiar campos
+3. Guardar",Actualiza via PATCH/PUT,/productos/{id}/
+PROD-005,Productos,Eliminar producto,Producto existente,1. Clic Eliminar,Producto eliminado,DELETE /productos/{id}/
+PROD-006,Productos,Categorias activas en select,API /categorias responde,1. Abrir formulario,Select muestra solo categorias activas,/categorias/
+PROD-007,Productos,IVA y margen calculados,Costo + margen + iva,"1. Cambiar margen/iva
+2. Ver precio venta",Precio redondeado correcto,
+PROD-008,Productos,Exportar CSV,Productos cargados,1. Clic Exportar,Se descarga CSV,
+ADM-U-001,Admin - Usuarios,Listar usuarios,API /usuarios responde,1. Abrir Admin,Lista muestra usuarios activos/inactivos,/usuarios/
+ADM-U-002,Admin - Usuarios,Crear usuario,Datos validos,"1. Completar formulario
+2. Guardar",Usuario creado por POST,/usuarios/
+ADM-U-003,Admin - Usuarios,Cambiar estado,Usuario existente,1. Clic Activar/Desactivar,Estado cambia via PATCH,/usuarios/{id}/estado
+ADM-C-001,Admin - Clientes,Crear cliente,Datos validos,"1. Completar formulario
+2. Guardar",Cliente creado por POST,/clientes/
+ADM-C-002,Admin - Clientes,Listar clientes,API /clientes responde,1. Abrir Admin,Lista muestra clientes,
+ADM-CA-001,Admin - Categorias,Listar categorias,API /categorias responde,1. Abrir Admin,Lista muestra categorias,/categorias/
+ADM-CA-002,Admin - Categorias,Crear categoria,Datos validos,"1. Completar formulario
+2. Guardar",Categoria creada por POST,/categorias/
+ADM-CA-003,Admin - Categorias,Cambiar estado,Categoria existente,1. Clic Activar/Desactivar,Muestra mensaje de activada/desactivada,PATCH /categorias/{id}/estado
+STK-001,Stock,Visualizar stock,Productos cargados,1. Abrir Stock,Listado de stock visible,
+FIN-001,Finanzas,Visualizar panel,Datos mock/servicio,1. Abrir Finanzas,Panel visible sin errores,
+PEND-001,Pendientes,Visualizar panel,Datos mock/servicio,1. Abrir Pendientes,Panel visible sin errores,

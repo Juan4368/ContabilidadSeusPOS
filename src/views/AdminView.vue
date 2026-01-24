@@ -12,6 +12,13 @@ type Categoria = {
   id: number
   nombre: string
   descripcion: string
+  estado: 'activo' | 'inactivo'
+}
+
+type CategoriaContabilidad = {
+  id: number
+  nombre: string
+  codigo: string
 }
 
 type Cliente = {
@@ -25,13 +32,16 @@ type Cliente = {
 const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 
 const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
+const CATEGORIAS_ENDPOINT = 'http://127.0.0.1:8000/categorias/'
+const CATEGORIAS_CONTABILIDAD_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/categorias/'
 
 const usuarios = reactive<Usuario[]>([])
 
 const categorias = reactive<Categoria[]>([
-  { id: 1, nombre: 'Bebidas', descripcion: 'Cafe, te, jugos' },
-  { id: 2, nombre: 'Snacks', descripcion: 'Sandwiches y panaderia' }
+  { id: 1, nombre: 'Bebidas', descripcion: 'Cafe, te, jugos', estado: 'activo' },
+  { id: 2, nombre: 'Snacks', descripcion: 'Sandwiches y panaderia', estado: 'activo' }
 ])
+const categoriasContabilidad = reactive<CategoriaContabilidad[]>([])
 
 const clientes = reactive<Cliente[]>([])
 
@@ -44,11 +54,15 @@ const usuarioForm = reactive({
   activo: true
 })
 const categoriaForm = reactive({ nombre: '', descripcion: '' })
+const categoriaContabilidadForm = reactive({ nombre: '', codigo: '' })
 const clienteForm = reactive({ nombre: '', telefono: '', email: '' })
 
 const errorUsuario = ref('')
 const errorCategoria = ref('')
+const errorCategoriaContabilidad = ref('')
 const errorCliente = ref('')
+const avisoCache = ref('')
+const avisoCategoria = ref('')
 
 const usuariosActivos = computed(() => usuarios.filter((usuario) => usuario.estado === 'activo').length)
 const totalClientes = computed(() => clientes.length)
@@ -91,6 +105,11 @@ const limpiarUsuario = () => {
 const limpiarCategoria = () => {
   categoriaForm.nombre = ''
   categoriaForm.descripcion = ''
+}
+
+const limpiarCategoriaContabilidad = () => {
+  categoriaContabilidadForm.nombre = ''
+  categoriaContabilidadForm.codigo = ''
 }
 
 const limpiarCliente = () => {
@@ -183,13 +202,32 @@ const crearCategoria = () => {
     return
   }
 
-  categorias.push({
-    id: Date.now(),
-    nombre,
-    descripcion
-  })
+  const crear = async () => {
+    try {
+      const respuesta = await fetch(CATEGORIAS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre, descripcion })
+      })
+      if (!respuesta.ok) {
+        const detalle = await respuesta.text().catch(() => '')
+        throw new Error(detalle || `Error ${respuesta.status}`)
+      }
+      const data = (await respuesta.json()) as Record<string, unknown>
+      categorias.unshift({
+        id: Number(data.categoria_id ?? data.id ?? Date.now()),
+        nombre: String(data.nombre ?? nombre),
+        descripcion: String(data.descripcion ?? descripcion),
+        estado: data.estado === false || data.estado === 'inactivo' ? 'inactivo' : 'activo'
+      })
+      limpiarCategoria()
+    } catch (error) {
+      console.error('Error al crear categoria', error)
+      errorCategoria.value = 'No fue posible crear la categoria.'
+    }
+  }
 
-  limpiarCategoria()
+  void crear()
 }
 
 const crearCliente = async () => {
@@ -253,14 +291,179 @@ const toggleEstado = async (id: number) => {
   }
 }
 
-const eliminarCategoria = (id: number) => {
-  const index = categorias.findIndex((item) => item.id === id)
-  if (index >= 0) categorias.splice(index, 1)
+const cargarCategorias = async () => {
+  try {
+    const respuesta = await fetch(CATEGORIAS_ENDPOINT)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const normalizadas = lista
+      .map((item, index) => {
+        if (!item || typeof item !== 'object') return null
+        const categoria = item as Record<string, unknown>
+        return {
+          id: Number(categoria.categoria_id ?? categoria.id ?? index + 1),
+          nombre: String(categoria.nombre ?? ''),
+          descripcion: String(categoria.descripcion ?? ''),
+          estado: categoria.estado === false || categoria.estado === 'inactivo' ? 'inactivo' : 'activo'
+        } as Categoria
+      })
+      .filter(Boolean) as Categoria[]
+    categorias.splice(0, categorias.length, ...normalizadas)
+  } catch (error) {
+    console.error('No se pudieron cargar categorias', error)
+  }
+}
+
+const cargarCategoriasContabilidad = async () => {
+  try {
+    const respuesta = await fetch(CATEGORIAS_CONTABILIDAD_ENDPOINT)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const normalizadas = lista
+      .map((item, index) => {
+        if (!item || typeof item !== 'object') return null
+        const categoria = item as Record<string, unknown>
+        return {
+          id: Number(categoria.categoria_id ?? categoria.id ?? index + 1),
+          nombre: String(categoria.nombre ?? ''),
+          codigo: String(categoria.codigo ?? '')
+        } as CategoriaContabilidad
+      })
+      .filter(Boolean) as CategoriaContabilidad[]
+    categoriasContabilidad.splice(0, categoriasContabilidad.length, ...normalizadas)
+  } catch (error) {
+    console.error('No se pudieron cargar categorias contabilidad', error)
+  }
+}
+
+const crearCategoriaContabilidad = async () => {
+  errorCategoriaContabilidad.value = ''
+  const nombre = categoriaContabilidadForm.nombre.trim()
+  const codigo = categoriaContabilidadForm.codigo.trim().toUpperCase()
+
+  if (!nombre || !codigo) {
+    errorCategoriaContabilidad.value = 'Completa nombre y codigo.'
+    return
+  }
+
+  try {
+    const respuesta = await fetch(CATEGORIAS_CONTABILIDAD_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, codigo })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json()) as Record<string, unknown>
+    categoriasContabilidad.unshift({
+      id: Number(data.categoria_id ?? data.id ?? Date.now()),
+      nombre: String(data.nombre ?? nombre),
+      codigo: String(data.codigo ?? codigo)
+    })
+    limpiarCategoriaContabilidad()
+  } catch (error) {
+    console.error('Error al crear categoria contabilidad', error)
+    errorCategoriaContabilidad.value = 'No fue posible crear la categoria.'
+  }
+}
+
+const categoriaContabilidadEdicionId = ref<number | null>(null)
+const categoriaContabilidadEdicion = reactive({ nombre: '', codigo: '' })
+
+const iniciarEdicionCategoriaContabilidad = (categoria: CategoriaContabilidad) => {
+  categoriaContabilidadEdicionId.value = categoria.id
+  categoriaContabilidadEdicion.nombre = categoria.nombre
+  categoriaContabilidadEdicion.codigo = categoria.codigo
+}
+
+const cancelarEdicionCategoriaContabilidad = () => {
+  categoriaContabilidadEdicionId.value = null
+  categoriaContabilidadEdicion.nombre = ''
+  categoriaContabilidadEdicion.codigo = ''
+}
+
+const guardarEdicionCategoriaContabilidad = async (categoria: CategoriaContabilidad) => {
+  errorCategoriaContabilidad.value = ''
+  const nombre = categoriaContabilidadEdicion.nombre.trim()
+  const codigo = categoriaContabilidadEdicion.codigo.trim().toUpperCase()
+
+  if (!nombre || !codigo) {
+    errorCategoriaContabilidad.value = 'Completa nombre y codigo.'
+    return
+  }
+
+  try {
+    const respuesta = await fetch(`${CATEGORIAS_CONTABILIDAD_ENDPOINT}${categoria.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, codigo })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    categoria.nombre = nombre
+    categoria.codigo = codigo
+    cancelarEdicionCategoriaContabilidad()
+  } catch (error) {
+    console.error('Error al actualizar categoria contabilidad', error)
+    errorCategoriaContabilidad.value = 'No fue posible actualizar la categoria.'
+  }
+}
+
+const mostrarAvisoCategoria = (mensaje: string) => {
+  avisoCategoria.value = mensaje
+  window.setTimeout(() => {
+    avisoCategoria.value = ''
+  }, 2500)
+}
+
+const toggleEstadoCategoria = async (id: number) => {
+  const categoria = categorias.find((item) => item.id === id)
+  if (!categoria) return
+  const estadoAnterior = categoria.estado
+  const nuevoEstado = categoria.estado === 'activo' ? 'inactivo' : 'activo'
+  categoria.estado = nuevoEstado
+
+  try {
+    const respuesta = await fetch(`${CATEGORIAS_ENDPOINT}${id}/estado`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ estado: nuevoEstado === 'activo' })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    mostrarAvisoCategoria(`Categoria ${nuevoEstado === 'activo' ? 'activada' : 'desactivada'}.`)
+  } catch (error) {
+    console.error('Error al actualizar estado', error)
+    categoria.estado = estadoAnterior
+    mostrarAvisoCategoria('No se pudo activar/desactivar la categoria.')
+  }
+}
+
+const limpiarCacheProductosPos = () => {
+  localStorage.removeItem('pos_productos_cache')
+  avisoCache.value = 'Cache POS limpiado.'
+  window.setTimeout(() => {
+    avisoCache.value = ''
+  }, 2000)
 }
 
 onMounted(() => {
   void cargarClientes()
   void cargarUsuarios()
+  void cargarCategorias()
+  void cargarCategoriasContabilidad()
 })
 </script>
 
@@ -277,6 +480,10 @@ onMounted(() => {
         <span>Activos: {{ usuariosActivos }}</span>
         <span>Total categorias: {{ categorias.length }}</span>
         <span>Total clientes: {{ totalClientes }}</span>
+      </div>
+      <div class="admin__acciones">
+        <button type="button" class="secundario" @click="limpiarCacheProductosPos">Limpiar cache POS</button>
+        <span v-if="avisoCache" class="aviso">{{ avisoCache }}</span>
       </div>
     </header>
 
@@ -344,6 +551,7 @@ onMounted(() => {
           <h2>Categorias</h2>
           <p>Organiza productos y registros financieros.</p>
         </header>
+        <p v-if="avisoCategoria" class="aviso">{{ avisoCategoria }}</p>
 
         <form class="form" @submit.prevent="crearCategoria">
           <label>
@@ -365,7 +573,59 @@ onMounted(() => {
               <small>{{ categoria.descripcion || 'Sin descripcion' }}</small>
             </div>
             <div class="acciones">
-              <button type="button" class="secundario" @click="eliminarCategoria(categoria.id)">Eliminar</button>
+              <span :class="['estado', categoria.estado]">{{ categoria.estado }}</span>
+              <button type="button" class="secundario" @click="toggleEstadoCategoria(categoria.id)">
+                {{ categoria.estado === 'activo' ? 'Desactivar' : 'Activar' }}
+              </button>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel__cabecera">
+          <h2>Categorias contabilidad</h2>
+          <p>Clasifica movimientos contables.</p>
+        </header>
+
+        <form class="form" @submit.prevent="crearCategoriaContabilidad">
+          <label>
+            <span>Nombre</span>
+            <input v-model="categoriaContabilidadForm.nombre" type="text" placeholder="SERVICIOS PUBLICOS" />
+          </label>
+          <label>
+            <span>Codigo</span>
+            <input v-model="categoriaContabilidadForm.codigo" type="text" placeholder="SP" />
+          </label>
+          <button type="submit">Crear categoria</button>
+          <p v-if="errorCategoriaContabilidad" class="error">{{ errorCategoriaContabilidad }}</p>
+        </form>
+
+        <ul class="lista">
+          <li v-for="categoria in categoriasContabilidad" :key="categoria.id">
+            <div v-if="categoriaContabilidadEdicionId === categoria.id" class="edicion">
+              <input v-model="categoriaContabilidadEdicion.nombre" type="text" class="inline-input" />
+              <input v-model="categoriaContabilidadEdicion.codigo" type="text" class="inline-input" />
+            </div>
+            <div v-else>
+              <strong>{{ categoria.nombre }}</strong>
+              <small>Codigo: {{ categoria.codigo }}</small>
+            </div>
+            <div class="acciones">
+              <template v-if="categoriaContabilidadEdicionId === categoria.id">
+                <button type="button" class="secundario" @click="guardarEdicionCategoriaContabilidad(categoria)">
+                  Guardar
+                </button>
+                <button type="button" class="secundario" @click="cancelarEdicionCategoriaContabilidad">Cancelar</button>
+              </template>
+              <button
+                v-else
+                type="button"
+                class="secundario"
+                @click="iniciarEdicionCategoriaContabilidad(categoria)"
+              >
+                Editar
+              </button>
             </div>
           </li>
         </ul>
@@ -443,6 +703,18 @@ onMounted(() => {
   color: #e2e8f0;
 }
 
+.admin__acciones {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.aviso {
+  color: #facc15;
+  font-weight: 600;
+}
+
 .grid {
   display: grid;
   gap: 1rem;
@@ -485,6 +757,19 @@ onMounted(() => {
   padding: 0.55rem 0.75rem;
   background: rgba(12, 13, 16, 0.92);
   color: #e2e8f0;
+}
+
+.inline-input {
+  border-radius: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.4rem 0.6rem;
+  background: rgba(12, 13, 16, 0.92);
+  color: #e2e8f0;
+}
+
+.edicion {
+  display: grid;
+  gap: 0.35rem;
 }
 
 .form button {

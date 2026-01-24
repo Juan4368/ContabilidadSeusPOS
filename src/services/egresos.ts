@@ -1,12 +1,26 @@
-import { http } from './http'
 import type { Registro, RegistroPayload } from './tipos'
 
-const RECURSO = '/egresos'
+const EGRESOS_ENDPOINT =
+  'http://127.0.0.1:8000/contabilidad/egresos/?desde=2026-01-20&hasta=2026-01-23'
+const EGRESOS_CREATE_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/egresos/'
 
-export const listarEgresos = () => http<Registro[]>(RECURSO)
+const request = async <T>(options?: RequestInit, url: string = EGRESOS_ENDPOINT): Promise<T> => {
+  const respuesta = await fetch(url, options)
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text().catch(() => '')
+    throw new Error(detalle || `Error ${respuesta.status}`)
+  }
+  if (respuesta.status === 204) {
+    return undefined as T
+  }
+  return (await respuesta.json()) as T
+}
+
+export const listarEgresos = () => request<Registro[]>()
 
 export const crearEgreso = (payload: RegistroPayload) =>
-  http<Registro>(RECURSO, {
+  request<Registro>({
     method: 'POST',
-    body: payload
-  })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }, EGRESOS_CREATE_ENDPOINT)

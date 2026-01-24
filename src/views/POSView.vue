@@ -35,26 +35,9 @@ type Usuario = {
   activo: boolean
 }
 
-type VentaPendiente = {
-  id: number
-  fecha: string
-  clienteId: number | null
-  clienteNombre?: string
-  items: ItemCarrito[]
-  nota: string
-  resumen: {
-    subtotalBruto: number
-    descuentoLineas: number
-    descuentoGlobal: number
-    impuesto: number
-    total: number
-    cambio: number
-  }
-}
-
 const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
-const VENTAS_PENDIENTES_KEY = 'pos_ventas_pendientes'
+const VENTAS_ENDPOINT = 'http://127.0.0.1:8000/ventas/'
 
 const productos = ref<Producto[]>([
   { id: 1, nombre: 'Café americano', precio: 2.5, stock: 18, categoria: 'Bebidas', destacador: 'Caliente' },
@@ -67,10 +50,15 @@ const productos = ref<Producto[]>([
   { id: 8, nombre: 'Combo desayuno', precio: 7.5, stock: 5, categoria: 'Combos', destacador: '-10%' }
 ])
 
-const categorias = computed(() => ['Todo', ...new Set(productos.value.map((p) => p.categoria))])
+const categorias = computed(() =>
+  Array.from(new Set(productos.value.map((p) => p.categoria))).filter(
+    (categoria) => categoria && categoria.toLowerCase() !== 'sin categoria'
+  )
+)
 
 const consulta = ref('')
-const categoriaActiva = ref('Todo')
+const buscadorRef = ref<HTMLElement | null>(null)
+const categoriaActiva = ref('')
 const carrito = ref<ItemCarrito[]>([])
 const pagoRecibido = ref(0)
 const notaRapida = ref('Venta mostrador')
@@ -79,25 +67,77 @@ const ventaId = ref<number>(Date.now())
 const fechaVenta = ref(new Date().toISOString())
 const tipoPago = ref('efectivo')
 const estadoVenta = ref(true)
+const ventaPendienteId = ref<number | null>(null)
 const userId = ref<number | null>(null)
 const usuarios = ref<Usuario[]>([])
 const payloadVenta = ref<Record<string, unknown> | null>(null)
 const respuestaVenta = ref<unknown>(null)
-const cargarPendienteEvento = () => {
-  const idRaw = localStorage.getItem('pos_pendiente_seleccion')
-  const id = idRaw ? Number(idRaw) : null
-  if (!id) return
-  const pendientes = obtenerPendientes()
-  const pendiente = pendientes.find((item) => item.id === id)
-  if (!pendiente) return
-  cargarVentaPendiente(pendiente)
-  localStorage.removeItem('pos_pendiente_seleccion')
+const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
+  if (!Array.isArray(detalles)) return []
+  return detalles
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const detalle = item as Record<string, unknown>
+      const id = Number(detalle.producto_id ?? detalle.productoId ?? detalle.id ?? 0)
+      if (!id) return null
+      const nombreBackend = detalle.producto_nombre ?? detalle.nombre
+      const productoLocal = productos.value.find((producto) => producto.backendId === id || producto.id === id)
+      const nombre = String(nombreBackend ?? productoLocal?.nombre ?? `Producto ${id}`)
+      const precio = Number(detalle.precio_unitario ?? detalle.precio ?? 0)
+      const cantidad = Number(detalle.cantidad ?? 1)
+      return {
+        id,
+        backendId: id,
+        nombre,
+        precio,
+        cantidad,
+        descuentoPct: 0
+      }
+    })
+    .filter(Boolean) as ItemCarrito[]
+}
+
+const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
+  const ventaIdRaw = Number(venta.venta_id ?? venta.id ?? NaN)
+  ventaId.value = Number.isFinite(ventaIdRaw) ? ventaIdRaw : Date.now()
+  ventaPendienteId.value = Number.isFinite(ventaIdRaw) ? ventaIdRaw : null
+  const clienteRaw = venta.cliente_id ?? venta.clienteId ?? null
+  clienteId.value = clienteRaw ? String(clienteRaw) : null
+  notaRapida.value = String(venta.nota_venta ?? venta.nota ?? 'Venta mostrador')
+  const tipoPagoRaw = venta.tipo_pago ?? venta.tipoPago
+  if (typeof tipoPagoRaw === 'string' && tipoPagoRaw.trim()) {
+    tipoPago.value = tipoPagoRaw
+  }
+  if (typeof venta.estado === 'boolean') {
+    estadoVenta.value = venta.estado
+  }
+  const userRaw = venta.user_id ?? venta.userId
+  if (userRaw !== null && userRaw !== undefined && String(userRaw).trim()) {
+    userId.value = Number(userRaw)
+  }
+  const detalles = venta.detalles ?? venta.items ?? []
+  carrito.value = mapearItemsPendientes(detalles)
+  ultimaAccion.value = `Venta #${ventaId.value} cargada`
+}
+
+const cargarPendienteEvento = (event: Event) => {
+  const detalle = (event as CustomEvent).detail as { venta?: Record<string, unknown> } | undefined
+  if (!detalle?.venta) return
+  cargarVentaPendienteDesdeApi(detalle.venta)
 }
 
 const manejarAtajos = (event: KeyboardEvent) => {
   if (event.key === 'F10') {
     event.preventDefault()
     void cerrarVenta()
+  }
+}
+
+const manejarClickFueraBuscador = (event: MouseEvent) => {
+  const target = event.target as Node | null
+  if (!buscadorRef.value || !target) return
+  if (!buscadorRef.value.contains(target)) {
+    consulta.value = ''
   }
 }
 const clientes = ref<Cliente[]>([])
@@ -116,7 +156,7 @@ const filtrados = computed(() => {
       producto.categoria.toLowerCase().includes(termino) ||
       (producto.codigoBarras ?? '').toLowerCase().includes(termino)
     const estaActivo = producto.estado !== false
-    const coincideCategoria = categoriaActiva.value === 'Todo' || producto.categoria === categoriaActiva.value
+    const coincideCategoria = !categoriaActiva.value || producto.categoria === categoriaActiva.value
     return coincideTexto && coincideCategoria && estaActivo
   })
 })
@@ -249,15 +289,16 @@ onMounted(() => {
   window.addEventListener('online', actualizarEstadoConexion)
   window.addEventListener('offline', actualizarEstadoConexion)
   window.addEventListener('pos:cargar-pendiente', cargarPendienteEvento)
-  cargarPendienteEvento()
   window.addEventListener('keydown', manejarAtajos)
+  window.addEventListener('click', manejarClickFueraBuscador)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('online', actualizarEstadoConexion)
   window.removeEventListener('offline', actualizarEstadoConexion)
-  window.removeEventListener('pos:cargar-pendiente', cargarPendienteEvento)
+  window.removeEventListener('pos:cargar-pendiente', cargarPendienteEvento as EventListener)
   window.removeEventListener('keydown', manejarAtajos)
+  window.removeEventListener('click', manejarClickFueraBuscador)
 })
 
 const normalizarDescuento = (valor: number | undefined) => Math.min(Math.max(valor ?? 0, 0), 100)
@@ -348,17 +389,11 @@ const cobrarRapido = () => {
   ultimaAccion.value = 'Pago igual al total'
 }
 
-const guardarVentaApi = async () => {
-  if (!userId.value) {
-    throw new Error('Selecciona un usuario antes de cobrar.')
-  }
-  if (!clienteId.value) {
-    throw new Error('Selecciona un cliente antes de cobrar.')
-  }
+const construirPayloadVenta = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
-  const payload = {
+  return {
     tipo_pago: tipoPago.value,
-    estado: estadoVenta.value,
+    estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
     user_id: userId.value,
     cliente_id: clienteId.value,
@@ -372,9 +407,34 @@ const guardarVentaApi = async () => {
       subtotal: redondear2(totalLinea(item))
     }))
   }
+}
+
+const construirPayloadActualizacion = (estadoOverride?: boolean) => {
+  const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
+  return {
+    estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
+    nota_venta: notaRapida.value || null,
+    impuesto: 0,
+    descuento: redondear2(resumenCarrito.value.descuentoLineas),
+    detalles: carrito.value.map((item) => ({
+      producto_id: item.backendId ?? item.id,
+      cantidad: item.cantidad,
+      precio_unitario: redondear2(item.precio)
+    }))
+  }
+}
+
+const guardarVentaApi = async (estadoOverride?: boolean) => {
+  if (!userId.value) {
+    throw new Error('Selecciona un usuario antes de cobrar.')
+  }
+  if (!clienteId.value) {
+    throw new Error('Selecciona un cliente antes de cobrar.')
+  }
+  const payload = construirPayloadVenta(estadoOverride)
   payloadVenta.value = payload
 
-  const respuesta = await fetch('http://127.0.0.1:8000/ventas/', {
+  const respuesta = await fetch(VENTAS_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -386,6 +446,32 @@ const guardarVentaApi = async () => {
   }
   const contenido = await respuesta.json().catch(() => null)
   respuestaVenta.value = contenido
+  return contenido
+}
+
+const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
+  if (!userId.value) {
+    throw new Error('Selecciona un usuario antes de cobrar.')
+  }
+  if (!clienteId.value) {
+    throw new Error('Selecciona un cliente antes de cobrar.')
+  }
+  const payload = construirPayloadActualizacion(estadoOverride)
+  payloadVenta.value = payload
+
+  const respuesta = await fetch(`${VENTAS_ENDPOINT}${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text().catch(() => '')
+    throw new Error(detalle || `Error ${respuesta.status}`)
+  }
+  const contenido = await respuesta.json().catch(() => null)
+  respuestaVenta.value = contenido
+  return contenido
 }
 
 const cerrarVenta = async () => {
@@ -394,7 +480,12 @@ const cerrarVenta = async () => {
     return
   }
   try {
-    await guardarVentaApi()
+    if (ventaPendienteId.value) {
+      await actualizarVentaApi(ventaPendienteId.value, true)
+      ventaPendienteId.value = null
+    } else {
+      await guardarVentaApi(true)
+    }
     limpiarCarrito()
     notaRapida.value = 'Venta mostrador'
     ventaId.value = Date.now()
@@ -408,53 +499,34 @@ const cerrarVenta = async () => {
   }
 }
 
-const obtenerPendientes = (): VentaPendiente[] => {
-  try {
-    const raw = localStorage.getItem(VENTAS_PENDIENTES_KEY)
-    const data = raw ? (JSON.parse(raw) as VentaPendiente[]) : []
-    return Array.isArray(data) ? data : []
-  } catch {
-    return []
-  }
-}
-
-const guardarPendientes = (pendientes: VentaPendiente[]) => {
-  try {
-    localStorage.setItem(VENTAS_PENDIENTES_KEY, JSON.stringify(pendientes))
-  } catch {
-    // Ignora errores de storage
-  }
-}
-
 const guardarVentaPendiente = () => {
   if (carrito.value.length === 0) {
     ultimaAccion.value = 'Agrega productos antes de guardar'
     return
   }
-  const cliente = clientes.value.find((item) => item.id === clienteId.value)
-  const venta: VentaPendiente = {
-    id: ventaId.value,
-    fecha: new Date().toISOString(),
-    clienteId: clienteId.value,
-    clienteNombre: cliente?.nombre,
-    items: JSON.parse(JSON.stringify(carrito.value)) as ItemCarrito[],
-    nota: notaRapida.value,
-    resumen: resumenCarrito.value
+  const guardar = async () => {
+    try {
+      if (ventaPendienteId.value) {
+        await actualizarVentaApi(ventaPendienteId.value, false)
+      } else {
+        const respuesta = await guardarVentaApi(false)
+        const idRaw =
+          (respuesta as Record<string, unknown> | null)?.venta_id ?? (respuesta as Record<string, unknown> | null)?.id
+        const id = idRaw !== null && idRaw !== undefined ? Number(idRaw) : NaN
+        ventaPendienteId.value = Number.isFinite(id) ? id : null
+      }
+      window.dispatchEvent(new CustomEvent('pos:pendientes-actualizados'))
+      limpiarCarrito()
+      ventaPendienteId.value = null
+      ultimaAccion.value = 'Venta guardada como pendiente'
+    } catch (error) {
+      const mensaje = error instanceof Error ? error.message : 'Error al guardar la venta'
+      console.error('No se pudo guardar la venta', error)
+      ultimaAccion.value = mensaje
+    }
   }
-  const pendientes = obtenerPendientes().filter((item) => item.id !== venta.id)
-  pendientes.unshift(venta)
-  guardarPendientes(pendientes)
-  window.dispatchEvent(new CustomEvent('pos:pendientes-actualizados'))
-  limpiarCarrito()
-  ultimaAccion.value = 'Venta guardada como pendiente'
-}
 
-const cargarVentaPendiente = (pendiente: VentaPendiente) => {
-  ventaId.value = pendiente.id
-  clienteId.value = pendiente.clienteId
-  notaRapida.value = pendiente.nota
-  carrito.value = JSON.parse(JSON.stringify(pendiente.items)) as ItemCarrito[]
-  ultimaAccion.value = `Venta #${pendiente.id} cargada`
+  void guardar()
 }
 
 const imprimirTicket = () => {
@@ -543,15 +615,6 @@ const guardarTicket = () => {
         <p class="cabecera__prefijo">Punto de venta</p>
         <h1>Sesión activa</h1>
         <p class="cabecera__nota">{{ notaRapida }}</p>
-        <label class="cabecera__cliente">
-          <span>Cliente</span>
-          <select v-model="clienteId">
-            <option :value="null">Generico</option>
-            <option v-for="cliente in clientes" :key="cliente.id" :value="cliente.id">
-              {{ cliente.nombre }}{{ cliente.documento ? ` · ${cliente.documento}` : '' }}
-            </option>
-          </select>
-        </label>
       </div>
       <div class="cabecera__chips">
         <span class="chip">Caja 01</span>
@@ -602,7 +665,7 @@ const guardarTicket = () => {
 
       <section class="panel productos">
         <div class="panel__encabezado">
-          <div class="buscador">
+          <div ref="buscadorRef" class="buscador">
             <input v-model="consulta" type="search" placeholder="Busque por nombre o codigo de barras..." />
             <ul v-if="sugerencias.length" class="sugerencias" role="listbox">
               <li v-for="producto in sugerencias" :key="producto.id">
@@ -612,7 +675,18 @@ const guardarTicket = () => {
                 </button>
               </li>
             </ul>
+
           </div>
+
+          <label class="cabecera__cliente">
+            <span>Cliente</span>
+            <select v-model="clienteId">
+              <option :value="null">Selecciona un cliente</option>
+              <option v-for="cliente in clientes" :key="cliente.id" :value="cliente.id">
+                {{ cliente.nombre }}{{ cliente.documento ? ` - ${cliente.documento}` : '' }}
+              </option>
+            </select>
+          </label>
           <div class="categorias">
             <button
               v-for="categoria in categorias"
@@ -627,10 +701,6 @@ const guardarTicket = () => {
         </div>
 
         <header class="panel__encabezado panel__encabezado--carrito">
-          <div>
-            <p class="cabecera__prefijo">Pedido actual</p>
-            <h2>Carrito</h2>
-          </div>
           <div class="botonera">
             <button type="button" class="boton secundaria" @click="limpiarCarrito">Vaciar</button>
             <button type="button" class="boton" @click="cobrarRapido">Pago exacto</button>
@@ -669,11 +739,7 @@ const guardarTicket = () => {
       <section class="panel detalle">
         <div class="detalle-venta">
           <label>
-            Venta ID
-            <input :value="ventaId" type="number" readonly />
-          </label>
-          <label>
-            Usuario ID
+            Usuario
             <select v-model.number="userId">
               <option :value="null">Selecciona usuario</option>
               <option v-for="usuario in usuarios" :key="usuario.id" :value="usuario.id">

@@ -1,21 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-import FinanzasView from './views/FinanzasView.vue'
 import POSView from './views/POSView.vue'
 import StockView from './views/StockView.vue'
 import AdminView from './views/AdminView.vue'
 import ProductosView from './views/ProductosView.vue'
 import PendientesView from './views/PendientesView.vue'
 import VentasPendientesView from './views/VentasPendientesView.vue'
+import ContabilidadView from './views/ContabilidadView.vue'
 
-type VistaId = 'pos' | 'finanzas' | 'stock' | 'admin' | 'productos' | 'pendientes' | 'ventas-pendientes'
+type VistaId = 'pos' | 'contabilidad' | 'stock' | 'admin' | 'productos' | 'pendientes' | 'ventas-pendientes'
 
 const vistaActiva = ref<VistaId>('pos')
 
 const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componente: typeof POSView }> = [
   { id: 'pos', nombre: 'POS', descripcion: 'Cobro en mostrador', componente: POSView },
-  { id: 'finanzas', nombre: 'Finanzas', descripcion: 'Ingresos, egresos y cartera', componente: FinanzasView },
+  { id: 'contabilidad', nombre: 'Contabilidad', descripcion: 'Ingresos, egresos y cartera', componente: ContabilidadView },
   { id: 'stock', nombre: 'Stock', descripcion: 'Inventario y reposicion', componente: StockView },
   { id: 'admin', nombre: 'Admin', descripcion: 'Usuarios y categorias', componente: AdminView },
   { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView },

@@ -21,13 +21,10 @@ type Producto = {
 type Categoria = {
   id: number
   nombre: string
+  estado: 'activo' | 'inactivo'
 }
 
-const categorias = reactive<Categoria[]>([
-  { id: 1, nombre: 'Bebidas' },
-  { id: 2, nombre: 'Snacks' },
-  { id: 3, nombre: 'Postres' }
-])
+const categorias = reactive<Categoria[]>([])
 
 const productos = reactive<Producto[]>([
   {
@@ -49,6 +46,7 @@ const productos = reactive<Producto[]>([
 ])
 
 const API_PRODUCTOS = 'http://127.0.0.1:8000/productos/'
+const API_CATEGORIAS = 'http://127.0.0.1:8000/categorias/'
 
 const form = reactive({
   codigoBarras: '',
@@ -287,20 +285,10 @@ const cargarProductos = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
 
-    const categoriasMap = new Map<number, string>()
     const normalizados = lista
       .map((item, index) => {
         const normalizado = normalizarProducto(item, index)
         if (!normalizado) return null
-        const categoriaNombre = (item as Record<string, unknown>).categoria_nombre ?? (item as Record<string, unknown>).categoriaNombre
-        if (normalizado.categoriaId !== null) {
-          categoriasMap.set(
-            normalizado.categoriaId,
-            typeof categoriaNombre === 'string' && categoriaNombre.trim()
-              ? categoriaNombre
-              : `Categoria ${normalizado.categoriaId}`
-          )
-        }
         return normalizado
       })
       .filter(Boolean) as Producto[]
@@ -308,21 +296,45 @@ const cargarProductos = async () => {
     if (normalizados.length) {
       productos.splice(0, productos.length, ...normalizados)
     }
-
-    if (categoriasMap.size) {
-      const nuevasCategorias = Array.from(categoriasMap.entries()).map(([id, nombre]) => ({ id, nombre }))
-      categorias.splice(0, categorias.length, ...nuevasCategorias)
-    }
   } catch (error) {
     console.error('No se pudieron cargar productos', error)
   }
 }
 
+const cargarCategorias = async () => {
+  try {
+    const respuesta = await fetch(API_CATEGORIAS)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const normalizadas = lista
+      .map((item, index) => {
+        if (!item || typeof item !== 'object') return null
+        const categoria = item as Record<string, unknown>
+        const id = Number(categoria.categoria_id ?? categoria.id ?? index + 1)
+        const nombre = String(categoria.nombre ?? `Categoria ${id}`)
+        const estadoRaw = categoria.estado
+        const estado =
+          estadoRaw === false || estadoRaw === 'inactivo' ? 'inactivo' : estadoRaw === 'activo' ? 'activo' : 'activo'
+        return { id, nombre, estado }
+      })
+      .filter(Boolean) as Categoria[]
+    categorias.splice(0, categorias.length, ...normalizadas)
+  } catch (error) {
+    console.error('No se pudieron cargar categorias', error)
+  }
+}
+
 onMounted(() => {
+  void cargarCategorias()
   void cargarProductos()
 })
 
-const categoriasFiltro = computed(() => ['Todas', ...new Set(categorias.map((categoria) => categoria.nombre))])
+const categoriasActivas = computed(() => categorias.filter((categoria) => categoria.estado === 'activo'))
+
+const categoriasFiltro = computed(() => ['Todas', ...new Set(categoriasActivas.value.map((categoria) => categoria.nombre))])
 
 const resumen = computed(() => {
   const total = productos.length
@@ -620,7 +632,7 @@ const categoriaNombre = (id: number | null) =>
             <span>Categoria</span>
             <select v-model="form.categoriaId">
               <option :value="null">Sin categoria</option>
-              <option v-for="categoria in categorias" :key="categoria.id" :value="categoria.id">
+              <option v-for="categoria in categoriasActivas" :key="categoria.id" :value="categoria.id">
                 {{ categoria.nombre }}
               </option>
             </select>
@@ -760,7 +772,7 @@ const categoriaNombre = (id: number | null) =>
           <span v-if="filaEdicionId === producto.id">
             <select v-model="filaEdicion.categoriaId">
               <option :value="null">Sin categoria</option>
-              <option v-for="categoria in categorias" :key="categoria.id" :value="categoria.id">
+              <option v-for="categoria in categoriasActivas" :key="categoria.id" :value="categoria.id">
                 {{ categoria.nombre }}
               </option>
             </select>

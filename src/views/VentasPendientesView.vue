@@ -10,8 +10,10 @@ type PendingItem = {
   items: number
 }
 
-const STORAGE_KEY = 'pos_ventas_pendientes'
+const VENTAS_ENDPOINT = 'http://127.0.0.1:8000/ventas/'
+const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 const pendientes = ref<PendingItem[]>([])
+const clientesMap = new Map<string, string>()
 
 const formatCurrency = (monto: number) =>
   monto.toLocaleString('es-CO', {
@@ -20,26 +22,55 @@ const formatCurrency = (monto: number) =>
     minimumFractionDigits: 0
   })
 
-const cargarPendientes = () => {
+const cargarClientes = async () => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    const data = raw ? (JSON.parse(raw) as unknown[]) : []
-    if (!Array.isArray(data)) {
-      pendientes.value = []
-      return
+    const respuesta = await fetch(CLIENTES_ENDPOINT)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
     }
-    pendientes.value = data
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    clientesMap.clear()
+    lista.forEach((item, index) => {
+      if (!item || typeof item !== 'object') return
+      const cliente = item as Record<string, unknown>
+      const id = String(cliente.cliente_id ?? cliente.id ?? cliente.pk ?? index + 1)
+      const nombre = String(cliente.nombre ?? cliente.name ?? '')
+      if (id && nombre) clientesMap.set(id, nombre)
+    })
+  } catch {
+    clientesMap.clear()
+  }
+}
+
+const cargarPendientes = async () => {
+  try {
+    const respuesta = await fetch(`${VENTAS_ENDPOINT}?estado=false`)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    pendientes.value = lista
       .map((item) => {
         if (!item || typeof item !== 'object') return null
         const venta = item as Record<string, unknown>
-        const id = Number(venta.id ?? venta.venta_id ?? 0)
+        const estadoRaw = venta.estado
+        const esPendiente = estadoRaw === false || estadoRaw === 'pendiente'
+        if (!esPendiente) return null
+        const id = Number(venta.venta_id ?? venta.id ?? 0)
         const fecha = String(venta.fecha ?? '')
-        const clienteId = (venta.clienteId ?? venta.cliente_id ?? null) as number | null
-        const clienteNombre = (venta.clienteNombre ?? venta.cliente_nombre ?? '') as string
-        const items = Array.isArray(venta.items) ? venta.items.length : Number(venta.items ?? 0)
-        const resumen = venta.resumen as Record<string, unknown> | undefined
-        const totalRaw = resumen?.total ?? venta.total ?? 0
-        const total = Number(totalRaw || 0)
+        const clienteIdRaw = venta.cliente_id ?? venta.clienteId ?? null
+        const clienteId = (clienteIdRaw ?? null) as number | null
+        const clienteIdStr = clienteIdRaw ? String(clienteIdRaw) : ''
+        const clienteNombre = (venta.cliente_nombre ??
+          venta.clienteNombre ??
+          (venta.cliente as Record<string, unknown> | undefined)?.nombre ??
+          clientesMap.get(clienteIdStr) ??
+          '') as string
+        const detalles = venta.detalles
+        const items = Array.isArray(detalles) ? detalles.length : Number(venta.items ?? 0)
+        const total = Number(venta.total ?? 0)
         return { id, fecha, clienteId, clienteNombre, items, total }
       })
       .filter(Boolean) as PendingItem[]
@@ -48,16 +79,24 @@ const cargarPendientes = () => {
   }
 }
 
-const abrirPendiente = (item: PendingItem) => {
-  localStorage.setItem('pos_pendiente_seleccion', String(item.id))
-  window.dispatchEvent(new CustomEvent('app:cambiar-vista', { detail: { vista: 'pos' } }))
-  window.setTimeout(() => {
-    window.dispatchEvent(new CustomEvent('pos:cargar-pendiente'))
-  }, 50)
+const abrirPendiente = async (item: PendingItem) => {
+  try {
+    const respuesta = await fetch(`${VENTAS_ENDPOINT}${item.id}`)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const venta = (await respuesta.json()) as Record<string, unknown>
+    window.dispatchEvent(new CustomEvent('app:cambiar-vista', { detail: { vista: 'pos' } }))
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('pos:cargar-pendiente', { detail: { venta } }))
+    }, 50)
+  } catch {
+    // Ignora errores para evitar bloquear el flujo
+  }
 }
 
 onMounted(() => {
-  cargarPendientes()
+  void cargarClientes().then(cargarPendientes)
   window.addEventListener('pos:pendientes-actualizados', cargarPendientes as EventListener)
   window.addEventListener('focus', cargarPendientes)
 })
