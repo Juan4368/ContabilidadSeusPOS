@@ -18,7 +18,8 @@ type Categoria = {
 type CategoriaContabilidad = {
   id: number
   nombre: string
-  codigo: string
+  codigo?: string
+  tipo_categoria?: string
 }
 
 type Cliente = {
@@ -29,11 +30,19 @@ type Cliente = {
   createdAt: string
 }
 
+type Proveedor = {
+  id: number
+  nombre: string
+  telefono: string
+  email: string
+}
+
 const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 
 const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
 const CATEGORIAS_ENDPOINT = 'http://127.0.0.1:8000/categorias/'
 const CATEGORIAS_CONTABILIDAD_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/categorias/'
+const PROVEEDORES_ENDPOINT = 'http://127.0.0.1:8000/proveedores/'
 
 const usuarios = reactive<Usuario[]>([])
 
@@ -44,6 +53,7 @@ const categorias = reactive<Categoria[]>([
 const categoriasContabilidad = reactive<CategoriaContabilidad[]>([])
 
 const clientes = reactive<Cliente[]>([])
+const proveedores = reactive<Proveedor[]>([])
 
 const usuarioForm = reactive({
   nombre: '',
@@ -54,13 +64,39 @@ const usuarioForm = reactive({
   activo: true
 })
 const categoriaForm = reactive({ nombre: '', descripcion: '' })
-const categoriaContabilidadForm = reactive({ nombre: '', codigo: '' })
+const categoriaContabilidadForm = reactive({ nombre: '', tipo_categoria: 'INGRESO' })
 const clienteForm = reactive({ nombre: '', telefono: '', email: '' })
+const proveedorForm = reactive({ nombre: '', telefono: '', email: '' })
+
+const accionesAdmin = [
+  { id: 'usuario', titulo: 'Ver usuarios', descripcion: 'Listado y estado de usuarios.' },
+  { id: 'categoria', titulo: 'Ver categorias', descripcion: 'Listado de categorias.' },
+  { id: 'contabilidad', titulo: 'Ver categorias contables', descripcion: 'Clasifica ingresos y egresos.' },
+  { id: 'cliente', titulo: 'Ver clientes', descripcion: 'Listado de clientes.' },
+  { id: 'proveedor', titulo: 'Ver proveedores', descripcion: 'Listado de proveedores.' }
+]
+
+const mostrarUsuarioForm = ref(false)
+const mostrarCategoriaForm = ref(false)
+const mostrarCategoriaContabilidadForm = ref(false)
+const mostrarClienteForm = ref(false)
+const mostrarProveedorForm = ref(false)
+const mostrarUsuarioCrear = ref(false)
+const mostrarCategoriaCrear = ref(false)
+const mostrarCategoriaContabilidadCrear = ref(false)
+const mostrarClienteCrear = ref(false)
+const mostrarProveedorCrear = ref(false)
 
 const errorUsuario = ref('')
 const errorCategoria = ref('')
 const errorCategoriaContabilidad = ref('')
 const errorCliente = ref('')
+const errorProveedor = ref('')
+const exitoUsuario = ref('')
+const exitoCategoria = ref('')
+const exitoCategoriaContabilidad = ref('')
+const exitoCliente = ref('')
+const exitoProveedor = ref('')
 const avisoCache = ref('')
 const avisoCategoria = ref('')
 
@@ -76,7 +112,7 @@ const cargarUsuarios = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizados = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const usuario = item as Record<string, unknown>
         const id = Number(usuario.user_id ?? usuario.id ?? index + 1)
@@ -109,13 +145,93 @@ const limpiarCategoria = () => {
 
 const limpiarCategoriaContabilidad = () => {
   categoriaContabilidadForm.nombre = ''
-  categoriaContabilidadForm.codigo = ''
+  categoriaContabilidadForm.tipo_categoria = 'INGRESO'
 }
 
 const limpiarCliente = () => {
   clienteForm.nombre = ''
   clienteForm.telefono = ''
   clienteForm.email = ''
+}
+
+const limpiarProveedor = () => {
+  proveedorForm.nombre = ''
+  proveedorForm.telefono = ''
+  proveedorForm.email = ''
+}
+
+const cerrarModalesAdmin = () => {
+  mostrarUsuarioForm.value = false
+  mostrarCategoriaForm.value = false
+  mostrarCategoriaContabilidadForm.value = false
+  mostrarClienteForm.value = false
+  mostrarProveedorForm.value = false
+  mostrarUsuarioCrear.value = false
+  mostrarCategoriaCrear.value = false
+  mostrarCategoriaContabilidadCrear.value = false
+  mostrarClienteCrear.value = false
+  mostrarProveedorCrear.value = false
+}
+
+const abrirModalAdmin = (id: string) => {
+  cerrarModalesAdmin()
+  errorUsuario.value = ''
+  errorCategoria.value = ''
+  errorCategoriaContabilidad.value = ''
+  errorCliente.value = ''
+  errorProveedor.value = ''
+  exitoUsuario.value = ''
+  exitoCategoria.value = ''
+  exitoCategoriaContabilidad.value = ''
+  exitoCliente.value = ''
+  exitoProveedor.value = ''
+  if (id === 'usuario') {
+    mostrarUsuarioForm.value = true
+  } else if (id === 'categoria') {
+    mostrarCategoriaForm.value = true
+  } else if (id === 'contabilidad') {
+    mostrarCategoriaContabilidadForm.value = true
+  } else if (id === 'cliente') {
+    mostrarClienteForm.value = true
+  } else if (id === 'proveedor') {
+    mostrarProveedorForm.value = true
+    void cargarProveedores()
+  }
+}
+
+const cerrarModalUsuario = () => {
+  mostrarUsuarioForm.value = false
+  errorUsuario.value = ''
+  exitoUsuario.value = ''
+  mostrarUsuarioCrear.value = false
+}
+
+const cerrarModalCategoria = () => {
+  mostrarCategoriaForm.value = false
+  errorCategoria.value = ''
+  exitoCategoria.value = ''
+  mostrarCategoriaCrear.value = false
+}
+
+const cerrarModalCategoriaContabilidad = () => {
+  mostrarCategoriaContabilidadForm.value = false
+  errorCategoriaContabilidad.value = ''
+  exitoCategoriaContabilidad.value = ''
+  mostrarCategoriaContabilidadCrear.value = false
+}
+
+const cerrarModalCliente = () => {
+  mostrarClienteForm.value = false
+  errorCliente.value = ''
+  exitoCliente.value = ''
+  mostrarClienteCrear.value = false
+}
+
+const cerrarModalProveedor = () => {
+  mostrarProveedorForm.value = false
+  errorProveedor.value = ''
+  exitoProveedor.value = ''
+  mostrarProveedorCrear.value = false
 }
 
 const cargarClientes = async () => {
@@ -127,7 +243,7 @@ const cargarClientes = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizados = lista
-      .map((item) => {
+      .map((item: unknown) => {
         if (!item || typeof item !== 'object') return null
         const cliente = item as Record<string, unknown>
         return {
@@ -147,6 +263,7 @@ const cargarClientes = async () => {
 
 const crearUsuario = async () => {
   errorUsuario.value = ''
+  exitoUsuario.value = ''
   const nombre = usuarioForm.nombre.trim()
   const email = usuarioForm.email.trim().toLowerCase()
   const contrasena = usuarioForm.contrasena.trim()
@@ -186,14 +303,43 @@ const crearUsuario = async () => {
       estado: data.activo === false ? 'inactivo' : 'activo'
     })
     limpiarUsuario()
+    exitoUsuario.value = 'Usuario creado correctamente.'
+    mostrarUsuarioCrear.value = false
   } catch (error) {
     console.error('Error al crear usuario', error)
     errorUsuario.value = 'No fue posible crear el usuario.'
   }
 }
 
+const cargarProveedores = async () => {
+  try {
+    const respuesta = await fetch(PROVEEDORES_ENDPOINT)
+    if (!respuesta.ok) {
+      throw new Error(`Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : []
+    const normalizados = lista
+      .map((item: unknown, index: number) => {
+        if (!item || typeof item !== 'object') return null
+        const proveedor = item as Record<string, unknown>
+        return {
+          id: Number(proveedor.id ?? index + 1),
+          nombre: String(proveedor.nombre ?? ''),
+          telefono: String(proveedor.telefono ?? ''),
+          email: String(proveedor.email ?? '')
+        }
+      })
+      .filter(Boolean) as Proveedor[]
+    proveedores.splice(0, proveedores.length, ...normalizados)
+  } catch (error) {
+    console.error('No se pudieron cargar proveedores', error)
+  }
+}
+
 const crearCategoria = () => {
   errorCategoria.value = ''
+  exitoCategoria.value = ''
   const nombre = categoriaForm.nombre.trim()
   const descripcion = categoriaForm.descripcion.trim()
 
@@ -221,9 +367,12 @@ const crearCategoria = () => {
         estado: data.estado === false || data.estado === 'inactivo' ? 'inactivo' : 'activo'
       })
       limpiarCategoria()
+      exitoCategoria.value = 'Categoria creada correctamente.'
+      mostrarCategoriaCrear.value = false
     } catch (error) {
       console.error('Error al crear categoria', error)
-      errorCategoria.value = 'No fue posible crear la categoria.'
+      const detalle = error instanceof Error ? error.message : String(error)
+      errorCategoria.value = `No fue posible crear la categoria. ${detalle}`
     }
   }
 
@@ -232,6 +381,7 @@ const crearCategoria = () => {
 
 const crearCliente = async () => {
   errorCliente.value = ''
+  exitoCliente.value = ''
   const nombre = clienteForm.nombre.trim()
   const telefono = clienteForm.telefono.trim()
   const email = clienteForm.email.trim().toLowerCase()
@@ -261,9 +411,50 @@ const crearCliente = async () => {
     }
     clientes.unshift(nuevo)
     limpiarCliente()
+    exitoCliente.value = 'Cliente creado correctamente.'
+    mostrarClienteCrear.value = false
   } catch (error) {
     console.error('Error al crear cliente', error)
     errorCliente.value = 'No fue posible crear el cliente.'
+  }
+}
+
+const crearProveedor = async () => {
+  errorProveedor.value = ''
+  exitoProveedor.value = ''
+  const nombre = proveedorForm.nombre.trim()
+  const telefono = proveedorForm.telefono.trim()
+  const email = proveedorForm.email.trim().toLowerCase()
+
+  if (!nombre || !telefono || !email) {
+    errorProveedor.value = 'Completa nombre, telefono y email.'
+    return
+  }
+
+  try {
+    const respuesta = await fetch(PROVEEDORES_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, telefono, email })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json()) as Record<string, unknown>
+    proveedores.unshift({
+      id: Number(data.id ?? Date.now()),
+      nombre: String(data.nombre ?? nombre),
+      telefono: String(data.telefono ?? telefono),
+      email: String(data.email ?? email)
+    })
+    limpiarProveedor()
+    exitoProveedor.value = 'Proveedor creado correctamente.'
+    mostrarProveedorCrear.value = false
+  } catch (error) {
+    console.error('Error al crear proveedor', error)
+    const detalle = error instanceof Error ? error.message : String(error)
+    errorProveedor.value = `No fue posible crear el proveedor. ${detalle}`
   }
 }
 
@@ -300,7 +491,7 @@ const cargarCategorias = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizadas = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const categoria = item as Record<string, unknown>
         return {
@@ -326,7 +517,7 @@ const cargarCategoriasContabilidad = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizadas = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const categoria = item as Record<string, unknown>
         return {
@@ -344,11 +535,12 @@ const cargarCategoriasContabilidad = async () => {
 
 const crearCategoriaContabilidad = async () => {
   errorCategoriaContabilidad.value = ''
+  exitoCategoriaContabilidad.value = ''
   const nombre = categoriaContabilidadForm.nombre.trim()
-  const codigo = categoriaContabilidadForm.codigo.trim().toUpperCase()
+  const tipoCategoria = categoriaContabilidadForm.tipo_categoria.trim().toUpperCase()
 
-  if (!nombre || !codigo) {
-    errorCategoriaContabilidad.value = 'Completa nombre y codigo.'
+  if (!nombre || !tipoCategoria) {
+    errorCategoriaContabilidad.value = 'Completa nombre y tipo de categoria.'
     return
   }
 
@@ -356,7 +548,7 @@ const crearCategoriaContabilidad = async () => {
     const respuesta = await fetch(CATEGORIAS_CONTABILIDAD_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, codigo })
+      body: JSON.stringify({ nombre, tipo_categoria: tipoCategoria })
     })
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
@@ -366,12 +558,16 @@ const crearCategoriaContabilidad = async () => {
     categoriasContabilidad.unshift({
       id: Number(data.categoria_id ?? data.id ?? Date.now()),
       nombre: String(data.nombre ?? nombre),
-      codigo: String(data.codigo ?? codigo)
+      codigo: String(data.codigo ?? ''),
+      tipo_categoria: String(data.tipo_categoria ?? tipoCategoria)
     })
     limpiarCategoriaContabilidad()
+    exitoCategoriaContabilidad.value = 'Categoria creada correctamente.'
+    mostrarCategoriaContabilidadCrear.value = false
   } catch (error) {
     console.error('Error al crear categoria contabilidad', error)
-    errorCategoriaContabilidad.value = 'No fue posible crear la categoria.'
+    const detalle = error instanceof Error ? error.message : String(error)
+    errorCategoriaContabilidad.value = `No fue posible crear la categoria. ${detalle}`
   }
 }
 
@@ -381,7 +577,7 @@ const categoriaContabilidadEdicion = reactive({ nombre: '', codigo: '' })
 const iniciarEdicionCategoriaContabilidad = (categoria: CategoriaContabilidad) => {
   categoriaContabilidadEdicionId.value = categoria.id
   categoriaContabilidadEdicion.nombre = categoria.nombre
-  categoriaContabilidadEdicion.codigo = categoria.codigo
+  categoriaContabilidadEdicion.codigo = categoria.codigo ?? ''
 }
 
 const cancelarEdicionCategoriaContabilidad = () => {
@@ -464,6 +660,7 @@ onMounted(() => {
   void cargarUsuarios()
   void cargarCategorias()
   void cargarCategoriasContabilidad()
+  void cargarProveedores()
 })
 </script>
 
@@ -487,14 +684,42 @@ onMounted(() => {
       </div>
     </header>
 
-    <section class="grid">
-      <section class="panel">
-        <header class="panel__cabecera">
-          <h2>Usuarios</h2>
-          <p>Alta y control basico de usuarios.</p>
-        </header>
+    <section class="admin__acciones-grid">
+      <article
+        v-for="accion in accionesAdmin"
+        :key="accion.id"
+        class="accion"
+        role="button"
+        tabindex="0"
+        @click="abrirModalAdmin(accion.id)"
+        @keyup.enter.prevent="abrirModalAdmin(accion.id)"
+        @keyup.space.prevent="abrirModalAdmin(accion.id)"
+      >
+        <div>
+          <h2>{{ accion.titulo }}</h2>
+          <p>{{ accion.descripcion }}</p>
+        </div>
+      </article>
+    </section>
 
-        <form class="form" @submit.prevent="crearUsuario">
+    <div
+      v-if="mostrarUsuarioForm"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cerrarModalUsuario"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Usuarios</h2>
+          <button type="button" class="modal__cerrar" @click="cerrarModalUsuario">x</button>
+        </div>
+        <div class="modal__acciones">
+          <button type="button" class="secundario" @click="mostrarUsuarioCrear = !mostrarUsuarioCrear">
+            {{ mostrarUsuarioCrear ? 'Ocultar formulario' : 'Crear usuario' }}
+          </button>
+        </div>
+        <form v-if="mostrarUsuarioCrear" class="form" @submit.prevent="crearUsuario">
           <label>
             <span>Nombre</span>
             <input v-model="usuarioForm.nombre" type="text" placeholder="Nombre completo" />
@@ -508,8 +733,8 @@ onMounted(() => {
             <input v-model="usuarioForm.numeroContacto" type="text" placeholder="3001234567" />
           </label>
           <label>
-            <span>Contraseña</span>
-            <input v-model="usuarioForm.contrasena" type="password" placeholder="••••••••" />
+            <span>Contrasena</span>
+            <input v-model="usuarioForm.contrasena" type="password" placeholder="********" />
           </label>
           <label>
             <span>Rol</span>
@@ -528,8 +753,8 @@ onMounted(() => {
           </label>
           <button type="submit">Crear usuario</button>
           <p v-if="errorUsuario" class="error">{{ errorUsuario }}</p>
+          <p v-if="exitoUsuario" class="exito">{{ exitoUsuario }}</p>
         </form>
-
         <ul class="lista">
           <li v-for="usuario in usuarios" :key="usuario.id">
             <div>
@@ -544,16 +769,28 @@ onMounted(() => {
             </div>
           </li>
         </ul>
+        <p v-if="errorUsuario" class="error">{{ errorUsuario }}</p>
       </section>
+    </div>
 
-      <section class="panel">
-        <header class="panel__cabecera">
+    <div
+      v-if="mostrarCategoriaForm"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cerrarModalCategoria"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
           <h2>Categorias</h2>
-          <p>Organiza productos y registros financieros.</p>
-        </header>
-        <p v-if="avisoCategoria" class="aviso">{{ avisoCategoria }}</p>
-
-        <form class="form" @submit.prevent="crearCategoria">
+          <button type="button" class="modal__cerrar" @click="cerrarModalCategoria">x</button>
+        </div>
+        <div class="modal__acciones">
+          <button type="button" class="secundario" @click="mostrarCategoriaCrear = !mostrarCategoriaCrear">
+            {{ mostrarCategoriaCrear ? 'Ocultar formulario' : 'Crear categoria' }}
+          </button>
+        </div>
+        <form v-if="mostrarCategoriaCrear" class="form" @submit.prevent="crearCategoria">
           <label>
             <span>Nombre</span>
             <input v-model="categoriaForm.nombre" type="text" placeholder="Nombre categoria" />
@@ -564,8 +801,8 @@ onMounted(() => {
           </label>
           <button type="submit">Crear categoria</button>
           <p v-if="errorCategoria" class="error">{{ errorCategoria }}</p>
+          <p v-if="exitoCategoria" class="exito">{{ exitoCategoria }}</p>
         </form>
-
         <ul class="lista">
           <li v-for="categoria in categorias" :key="categoria.id">
             <div>
@@ -580,27 +817,48 @@ onMounted(() => {
             </div>
           </li>
         </ul>
+        <p v-if="avisoCategoria" class="aviso">{{ avisoCategoria }}</p>
+        <p v-if="errorCategoria" class="error">{{ errorCategoria }}</p>
       </section>
+    </div>
 
-      <section class="panel">
-        <header class="panel__cabecera">
-          <h2>Categorias contabilidad</h2>
-          <p>Clasifica movimientos contables.</p>
-        </header>
-
-        <form class="form" @submit.prevent="crearCategoriaContabilidad">
+    <div
+      v-if="mostrarCategoriaContabilidadForm"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cerrarModalCategoriaContabilidad"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Categorias contables</h2>
+          <button type="button" class="modal__cerrar" @click="cerrarModalCategoriaContabilidad">x</button>
+        </div>
+        <div class="modal__acciones">
+          <button
+            type="button"
+            class="secundario"
+            @click="mostrarCategoriaContabilidadCrear = !mostrarCategoriaContabilidadCrear"
+          >
+            {{ mostrarCategoriaContabilidadCrear ? 'Ocultar formulario' : 'Crear categoria' }}
+          </button>
+        </div>
+        <form v-if="mostrarCategoriaContabilidadCrear" class="form" @submit.prevent="crearCategoriaContabilidad">
           <label>
             <span>Nombre</span>
             <input v-model="categoriaContabilidadForm.nombre" type="text" placeholder="SERVICIOS PUBLICOS" />
           </label>
           <label>
-            <span>Codigo</span>
-            <input v-model="categoriaContabilidadForm.codigo" type="text" placeholder="SP" />
+            <span>Tipo Categoria</span>
+            <select v-model="categoriaContabilidadForm.tipo_categoria">
+              <option value="INGRESO">Ingreso</option>
+              <option value="EGRESO">Egreso</option>
+            </select>
           </label>
           <button type="submit">Crear categoria</button>
           <p v-if="errorCategoriaContabilidad" class="error">{{ errorCategoriaContabilidad }}</p>
+          <p v-if="exitoCategoriaContabilidad" class="exito">{{ exitoCategoriaContabilidad }}</p>
         </form>
-
         <ul class="lista">
           <li v-for="categoria in categoriasContabilidad" :key="categoria.id">
             <div v-if="categoriaContabilidadEdicionId === categoria.id" class="edicion">
@@ -609,7 +867,7 @@ onMounted(() => {
             </div>
             <div v-else>
               <strong>{{ categoria.nombre }}</strong>
-              <small>Codigo: {{ categoria.codigo }}</small>
+              <small>Tipo: {{ categoria.tipo_categoria ?? 'Sin tipo' }}</small>
             </div>
             <div class="acciones">
               <template v-if="categoriaContabilidadEdicionId === categoria.id">
@@ -629,15 +887,28 @@ onMounted(() => {
             </div>
           </li>
         </ul>
+        <p v-if="errorCategoriaContabilidad" class="error">{{ errorCategoriaContabilidad }}</p>
       </section>
+    </div>
 
-      <section class="panel">
-        <header class="panel__cabecera">
+    <div
+      v-if="mostrarClienteForm"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cerrarModalCliente"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
           <h2>Clientes</h2>
-          <p>Gestiona clientes para facturacion y seguimiento.</p>
-        </header>
-
-        <form class="form" @submit.prevent="crearCliente">
+          <button type="button" class="modal__cerrar" @click="cerrarModalCliente">x</button>
+        </div>
+        <div class="modal__acciones">
+          <button type="button" class="secundario" @click="mostrarClienteCrear = !mostrarClienteCrear">
+            {{ mostrarClienteCrear ? 'Ocultar formulario' : 'Crear cliente' }}
+          </button>
+        </div>
+        <form v-if="mostrarClienteCrear" class="form" @submit.prevent="crearCliente">
           <label>
             <span>Nombre</span>
             <input v-model="clienteForm.nombre" type="text" placeholder="Nombre completo" />
@@ -652,21 +923,67 @@ onMounted(() => {
           </label>
           <button type="submit">Crear cliente</button>
           <p v-if="errorCliente" class="error">{{ errorCliente }}</p>
+          <p v-if="exitoCliente" class="exito">{{ exitoCliente }}</p>
         </form>
-
         <ul class="lista">
           <li v-for="cliente in clientes" :key="cliente.id">
             <div>
               <strong>{{ cliente.nombre }}</strong>
-              <small>{{ cliente.telefono }} · {{ cliente.email }}</small>
+              <small>{{ cliente.telefono }} - {{ cliente.email }}</small>
             </div>
             <div class="acciones">
               <span class="estado">{{ cliente.createdAt ? 'Registrado' : 'Nuevo' }}</span>
             </div>
           </li>
         </ul>
+        <p v-if="errorCliente" class="error">{{ errorCliente }}</p>
       </section>
-    </section>
+    </div>
+
+    <div
+      v-if="mostrarProveedorForm"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cerrarModalProveedor"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Proveedores</h2>
+          <button type="button" class="modal__cerrar" @click="cerrarModalProveedor">x</button>
+        </div>
+        <div class="modal__acciones">
+          <button type="button" class="secundario" @click="mostrarProveedorCrear = !mostrarProveedorCrear">
+            {{ mostrarProveedorCrear ? 'Ocultar formulario' : 'Crear proveedor' }}
+          </button>
+        </div>
+        <form v-if="mostrarProveedorCrear" class="form" @submit.prevent="crearProveedor">
+          <label>
+            <span>Nombre</span>
+            <input v-model="proveedorForm.nombre" type="text" placeholder="Nombre proveedor" />
+          </label>
+          <label>
+            <span>Telefono</span>
+            <input v-model="proveedorForm.telefono" type="text" placeholder="3001234567" />
+          </label>
+          <label>
+            <span>Email</span>
+            <input v-model="proveedorForm.email" type="email" placeholder="proveedor@correo.com" />
+          </label>
+          <button type="submit">Crear proveedor</button>
+          <p v-if="errorProveedor" class="error">{{ errorProveedor }}</p>
+          <p v-if="exitoProveedor" class="exito">{{ exitoProveedor }}</p>
+        </form>
+        <ul class="lista">
+          <li v-for="proveedor in proveedores" :key="proveedor.id">
+            <div>
+              <strong>{{ proveedor.nombre }}</strong>
+              <small>{{ proveedor.telefono }} - {{ proveedor.email }}</small>
+            </div>
+          </li>
+        </ul>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -710,6 +1027,34 @@ onMounted(() => {
   gap: 0.75rem;
 }
 
+.admin__acciones-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.accion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(9, 10, 13, 0.85);
+  cursor: pointer;
+}
+
+.accion h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.accion p {
+  margin: 0.35rem 0 0;
+  color: #94a3b8;
+}
+
 .aviso {
   color: #facc15;
   font-weight: 600;
@@ -728,6 +1073,52 @@ onMounted(() => {
   padding: 1.25rem;
   display: grid;
   gap: 1rem;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 4, 7, 0.7);
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  z-index: 50;
+}
+
+.modal__contenido {
+  padding: 1rem 1.2rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(10, 11, 14, 0.92);
+  width: min(640px, 92vw);
+  margin: 0 auto;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+}
+
+.modal__encabezado {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.modal__cerrar {
+  border: none;
+  background: rgba(148, 163, 184, 0.15);
+  color: #f8fafc;
+  border-radius: 0.6rem;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.modal__acciones {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.75rem;
 }
 
 .panel__cabecera h2 {
@@ -751,7 +1142,8 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.form input {
+.form input,
+.form select {
   border-radius: 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
   padding: 0.55rem 0.75rem;
@@ -786,6 +1178,12 @@ onMounted(() => {
 .error {
   margin: 0;
   color: #f87171;
+  font-size: 0.9rem;
+}
+
+.exito {
+  margin: 0;
+  color: #86efac;
   font-size: 0.9rem;
 }
 

@@ -61,7 +61,7 @@ const buscadorRef = ref<HTMLElement | null>(null)
 const categoriaActiva = ref('')
 const carrito = ref<ItemCarrito[]>([])
 const pagoRecibido = ref(0)
-const notaRapida = ref('Venta mostrador')
+const notaRapida = ref('')
 const ultimaAccion = ref('Listo para vender')
 const ventaId = ref<number>(Date.now())
 const fechaVenta = ref(new Date().toISOString())
@@ -103,9 +103,11 @@ const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
   ventaPendienteId.value = Number.isFinite(ventaIdRaw) ? ventaIdRaw : null
   const clienteRaw = venta.cliente_id ?? venta.clienteId ?? null
   clienteId.value = clienteRaw ? String(clienteRaw) : null
-  notaRapida.value = String(venta.nota_venta ?? venta.nota ?? 'Venta mostrador')
+  notaRapida.value = String(venta.nota_venta ?? venta.nota ?? '')
   const tipoPagoRaw = venta.tipo_pago ?? venta.tipoPago
-  if (typeof tipoPagoRaw === 'string' && tipoPagoRaw.trim()) {
+  if (tipoPagoRaw === null) {
+    tipoPago.value = 'credito'
+  } else if (typeof tipoPagoRaw === 'string' && tipoPagoRaw.trim()) {
     tipoPago.value = tipoPagoRaw
   }
   if (typeof venta.estado === 'boolean') {
@@ -239,7 +241,7 @@ const cargarClientes = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizados = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const cliente = item as Record<string, unknown>
         const id = String(cliente.cliente_id ?? cliente.id ?? cliente.pk ?? index + 1)
@@ -266,7 +268,7 @@ const cargarUsuarios = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizados = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const usuario = item as Record<string, unknown>
         const id = Number(usuario.user_id ?? usuario.id ?? index + 1)
@@ -391,8 +393,9 @@ const cobrarRapido = () => {
 
 const construirPayloadVenta = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
+  const tipoPagoPayload = tipoPago.value === 'credito' ? null : tipoPago.value
   return {
-    tipo_pago: tipoPago.value,
+    tipo_pago: tipoPagoPayload,
     estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
     user_id: userId.value,
@@ -487,7 +490,7 @@ const cerrarVenta = async () => {
       await guardarVentaApi(true)
     }
     limpiarCarrito()
-    notaRapida.value = 'Venta mostrador'
+    notaRapida.value = ''
     ventaId.value = Date.now()
     fechaVenta.value = new Date().toISOString()
     estadoVenta.value = true
@@ -612,8 +615,6 @@ const guardarTicket = () => {
   <main class="pos">
     <header class="cabecera">
       <div>
-        <p class="cabecera__prefijo">Punto de venta</p>
-        <h1>Sesión activa</h1>
         <p class="cabecera__nota">{{ notaRapida }}</p>
       </div>
       <div class="cabecera__chips">
@@ -665,6 +666,15 @@ const guardarTicket = () => {
 
       <section class="panel productos">
         <div class="panel__encabezado">
+          <label class="cabecera__cliente">
+            <span>Cliente</span>
+            <select v-model="clienteId">
+              <option :value="null">Selecciona un cliente</option>
+              <option v-for="cliente in clientes" :key="cliente.id" :value="cliente.id">
+                {{ cliente.nombre }}{{ cliente.documento ? ` - ${cliente.documento}` : '' }}
+              </option>
+            </select>
+          </label>
           <div ref="buscadorRef" class="buscador">
             <input v-model="consulta" type="search" placeholder="Busque por nombre o codigo de barras..." />
             <ul v-if="sugerencias.length" class="sugerencias" role="listbox">
@@ -677,16 +687,6 @@ const guardarTicket = () => {
             </ul>
 
           </div>
-
-          <label class="cabecera__cliente">
-            <span>Cliente</span>
-            <select v-model="clienteId">
-              <option :value="null">Selecciona un cliente</option>
-              <option v-for="cliente in clientes" :key="cliente.id" :value="cliente.id">
-                {{ cliente.nombre }}{{ cliente.documento ? ` - ${cliente.documento}` : '' }}
-              </option>
-            </select>
-          </label>
           <div class="categorias">
             <button
               v-for="categoria in categorias"
@@ -753,6 +753,7 @@ const guardarTicket = () => {
               <option value="efectivo">Efectivo</option>
               <option value="tarjeta">Tarjeta</option>
               <option value="transferencia">Transferencia</option>
+              <option value="credito">Credito</option>
               <option value="otro">Otro</option>
             </select>
           </label>

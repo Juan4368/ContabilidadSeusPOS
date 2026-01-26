@@ -31,14 +31,6 @@ const leerJson = <T,>(key: string): T | null => {
   }
 }
 
-const guardarJson = (key: string, data: unknown) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(data))
-  } catch {
-    // Ignora errores de storage
-  }
-}
-
 const cargarPendientes = () => {
   categorias.value = leerJson<Categoria[]>(CACHE_CATEGORIAS_KEY) ?? []
   const categoriasPorId = new Map(categorias.value.map((categoria) => [categoria.id, categoria.nombre]))
@@ -47,11 +39,12 @@ const cargarPendientes = () => {
   tipos.forEach((tipo) => {
     const cola = leerJson<RegistroPayload[]>(queueKeyRegistros(tipo)) ?? []
     cola.forEach((payload, index) => {
+      const categoriaId = payload.categoriaId ?? 0
       lista.push({
-        id: `${tipo}-${index}-${payload.fecha}-${payload.categoriaId}`,
+        id: `${tipo}-${index}-${payload.fecha}-${categoriaId}`,
         tipo,
         payload,
-        categoriaNombre: categoriasPorId.get(payload.categoriaId) ?? 'Sin categoría'
+        categoriaNombre: categoriasPorId.get(categoriaId) ?? 'Sin categoría'
       })
     })
   })

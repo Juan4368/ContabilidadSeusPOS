@@ -286,7 +286,7 @@ const cargarProductos = async () => {
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
 
     const normalizados = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         const normalizado = normalizarProducto(item, index)
         if (!normalizado) return null
         return normalizado
@@ -310,7 +310,7 @@ const cargarCategorias = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizadas = lista
-      .map((item, index) => {
+      .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const categoria = item as Record<string, unknown>
         const id = Number(categoria.categoria_id ?? categoria.id ?? index + 1)

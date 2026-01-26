@@ -31,7 +31,7 @@ const cargarClientes = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     clientesMap.clear()
-    lista.forEach((item, index) => {
+    lista.forEach((item: unknown, index: number) => {
       if (!item || typeof item !== 'object') return
       const cliente = item as Record<string, unknown>
       const id = String(cliente.cliente_id ?? cliente.id ?? cliente.pk ?? index + 1)
@@ -52,7 +52,7 @@ const cargarPendientes = async () => {
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     pendientes.value = lista
-      .map((item) => {
+      .map((item: unknown) => {
         if (!item || typeof item !== 'object') return null
         const venta = item as Record<string, unknown>
         const estadoRaw = venta.estado

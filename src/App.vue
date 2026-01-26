@@ -8,14 +8,24 @@ import ProductosView from './views/ProductosView.vue'
 import PendientesView from './views/PendientesView.vue'
 import VentasPendientesView from './views/VentasPendientesView.vue'
 import ContabilidadView from './views/ContabilidadView.vue'
+import CarteraView from './views/CarteraView.vue'
 
-type VistaId = 'pos' | 'contabilidad' | 'stock' | 'admin' | 'productos' | 'pendientes' | 'ventas-pendientes'
+type VistaId =
+  | 'pos'
+  | 'contabilidad'
+  | 'cartera'
+  | 'stock'
+  | 'admin'
+  | 'productos'
+  | 'pendientes'
+  | 'ventas-pendientes'
 
 const vistaActiva = ref<VistaId>('pos')
 
 const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componente: typeof POSView }> = [
   { id: 'pos', nombre: 'POS', descripcion: 'Cobro en mostrador', componente: POSView },
   { id: 'contabilidad', nombre: 'Contabilidad', descripcion: 'Ingresos, egresos y cartera', componente: ContabilidadView },
+  { id: 'cartera', nombre: 'Cartera', descripcion: 'Cuentas por cobrar', componente: CarteraView },
   { id: 'stock', nombre: 'Stock', descripcion: 'Inventario y reposicion', componente: StockView },
   { id: 'admin', nombre: 'Admin', descripcion: 'Usuarios y categorias', componente: AdminView },
   { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView },
