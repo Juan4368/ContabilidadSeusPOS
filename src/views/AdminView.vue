@@ -39,8 +39,8 @@ type Proveedor = {
 
 const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 
-const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
-const CATEGORIAS_ENDPOINT = 'http://127.0.0.1:8000/categorias/'
+const USUARIOS_ENDPOINT = 'http://3.15.163.214/ApiPOS/usuarios/'
+const CATEGORIAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/categorias/'
 const CATEGORIAS_CONTABILIDAD_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/categorias/'
 const PROVEEDORES_ENDPOINT = 'http://127.0.0.1:8000/proveedores/'
 
