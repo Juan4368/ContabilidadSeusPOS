@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, onMounted, ref } from 'vue'
 
 type VentaDetalle = {
@@ -25,7 +26,7 @@ type CuentaPorCobrar = {
   venta_detalles: VentaDetalle[]
 }
 
-const CUENTAS_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/cuentas-por-cobrar/'
+const CUENTAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/cuentas-por-cobrar/'
 
 const cuentas = ref<CuentaPorCobrar[]>([])
 const cargando = ref(false)
@@ -169,6 +170,7 @@ onMounted(() => {
         <p class="cartera__nota">Cuentas por cobrar y saldos pendientes.</p>
       </div>
       <div class="cartera__acciones">
+        <SessionRoleChip />
         <button type="button" class="boton secundario" @click="cargarCuentas" :disabled="cargando">
           {{ cargando ? 'Actualizando...' : 'Actualizar' }}
         </button>
@@ -604,3 +606,4 @@ onMounted(() => {
   }
 }
 </style>
+

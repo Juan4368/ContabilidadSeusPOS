@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 
 type Producto = {
@@ -549,6 +550,7 @@ const categoriaNombre = (id: number | null) =>
         <p class="productos__nota">Gestiona el catalogo y los precios de venta.</p>
       </div>
       <div class="productos__acciones">
+        <SessionRoleChip />
         <button type="button" class="boton secundaria" @click="exportarProductos">Exportar</button>
         <button type="button" class="boton" @click="mostrarFormulario = true">Nuevo producto</button>
       </div>

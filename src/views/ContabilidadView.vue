@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { onMounted, ref, watch } from 'vue'
 
 import { crearIngreso } from '../services/ingresos'
@@ -318,7 +319,7 @@ const cargarCategoriasContables = async () => {
   cargandoCategorias.value = true
   errorCategorias.value = null
   try {
-    const respuesta = await fetch('http://127.0.0.1:8000/contabilidad/categorias/')
+    const respuesta = await fetch('http://3.15.163.214/ApiPOS/contabilidad/categorias/')
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
@@ -347,7 +348,7 @@ const cargarProveedores = async (forzar = false) => {
   cargandoProveedores.value = true
   errorProveedores.value = null
   try {
-    const respuesta = await fetch('http://127.0.0.1:8000/proveedores/')
+    const respuesta = await fetch('http://3.15.163.214/ApiPOS/proveedores/')
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
@@ -505,7 +506,7 @@ const registrarCategoria = async () => {
   }
   try {
     formularioCategoria.value.codigo = codigoNormalizado
-    const respuesta = await fetch('http://127.0.0.1:8000/contabilidad/categorias/', {
+    const respuesta = await fetch('http://3.15.163.214/ApiPOS/contabilidad/categorias/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(formularioCategoria.value)
@@ -554,6 +555,7 @@ onMounted(() => {
         <p class="contabilidad__nota">Revisa ingresos, egresos y cartera desde un solo lugar.</p>
       </div>
       <div class="contabilidad__acciones">
+        <SessionRoleChip />
         <button type="button" class="boton secundario">Exportar</button>
         <button type="button" class="boton">Nuevo registro</button>
       </div>
@@ -1068,3 +1070,4 @@ onMounted(() => {
   }
 }
 </style>
+

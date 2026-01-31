@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, reactive, ref } from 'vue'
 
 type StockItem = {
@@ -154,6 +155,7 @@ const setStock = (item: StockItem, valor: number) => {
         <p class="stock__nota">Ajusta cantidades, revisa alertas y prepara pedidos de reposicion.</p>
       </div>
       <div class="stock__acciones">
+        <SessionRoleChip />
         <button type="button" class="boton secundario">Exportar</button>
         <button type="button" class="boton">Nuevo producto</button>
       </div>

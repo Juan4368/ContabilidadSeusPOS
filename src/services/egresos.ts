@@ -1,8 +1,8 @@
 import type { Registro, RegistroPayload } from './tipos'
 
 const EGRESOS_ENDPOINT =
-  'http://127.0.0.1:8000/contabilidad/egresos/?desde=2026-01-20&hasta=2026-01-23'
-const EGRESOS_CREATE_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/egresos/'
+  'http://3.15.163.214/ApiPOS/contabilidad/egresos/?desde=2026-01-20&hasta=2026-01-23'
+const EGRESOS_CREATE_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/egresos/'
 
 const request = async <T>(options?: RequestInit, url: string = EGRESOS_ENDPOINT): Promise<T> => {
   const respuesta = await fetch(url, options)
@@ -24,3 +24,4 @@ export const crearEgreso = (payload: RegistroPayload) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   }, EGRESOS_CREATE_ENDPOINT)
+

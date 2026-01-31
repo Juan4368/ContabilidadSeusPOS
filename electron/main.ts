@@ -1,6 +1,7 @@
-import { app, BrowserWindow, Menu } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import fs from 'node:fs/promises'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -23,6 +24,17 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 let win: BrowserWindow | null
+const logsDir = path.join(process.env.APP_ROOT, 'logs')
+
+ipcMain.handle('log:append', async (_event, payload: { filename?: string; lines?: string[] }) => {
+  const filename = payload?.filename?.trim() || 'app.log'
+  const lines = Array.isArray(payload?.lines) ? payload.lines : []
+  if (!lines.length) return
+  await fs.mkdir(logsDir, { recursive: true })
+  const filePath = path.join(logsDir, filename)
+  const content = lines.map((line) => `${line}\n`).join('')
+  await fs.appendFile(filePath, content, 'utf8')
+})
 
 function createWindow() {
   win = new BrowserWindow({
@@ -65,4 +77,11 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+app.whenReady().then(async () => {
+  try {
+    await fs.mkdir(logsDir, { recursive: true })
+  } catch {
+    // Ignora errores de creación de logs
+  }
+  createWindow()
+})

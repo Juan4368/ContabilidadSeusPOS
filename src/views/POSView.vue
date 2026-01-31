@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import jsPDF from 'jspdf'
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 
 type Producto = {
   id: number
@@ -21,23 +22,19 @@ type ItemCarrito = {
   precio: number
   cantidad: number
   descuentoPct: number
+  descuentoMonto: number
 }
 
 type Cliente = {
   id: string
   nombre: string
   documento?: string
+  descuentoPesos?: number
+  descuentoPorcentaje?: number
 }
 
-type Usuario = {
-  id: number
-  nombre: string
-  activo: boolean
-}
-
-const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
-const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
-const VENTAS_ENDPOINT = 'http://127.0.0.1:8000/ventas/'
+const CLIENTES_ENDPOINT = 'http://127.0.0.1:8001/clientes/'
+const VENTAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/ventas/'
 
 const productos = ref<Producto[]>([
   { id: 1, nombre: 'Café americano', precio: 2.5, stock: 18, categoria: 'Bebidas', destacador: 'Caliente' },
@@ -68,10 +65,53 @@ const fechaVenta = ref(new Date().toISOString())
 const tipoPago = ref('efectivo')
 const estadoVenta = ref(true)
 const ventaPendienteId = ref<number | null>(null)
-const userId = ref<number | null>(null)
-const usuarios = ref<Usuario[]>([])
 const payloadVenta = ref<Record<string, unknown> | null>(null)
 const respuestaVenta = ref<unknown>(null)
+const mostrarTicketModal = ref(false)
+const descuentoItem = ref<ItemCarrito | null>(null)
+const tamañoPanelProductos = ref(62)
+const tamañoPanelDetalle = computed(() => Math.max(100 - tamañoPanelProductos.value, 20))
+const arrastrandoSplitter = ref(false)
+let inicioArrastreX = 0
+let inicioArrastrePorcentaje = 62
+
+const iniciarSplitter = (event: MouseEvent) => {
+  arrastrandoSplitter.value = true
+  inicioArrastreX = event.clientX
+  inicioArrastrePorcentaje = tamañoPanelProductos.value
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+const moverSplitter = (event: MouseEvent) => {
+  if (!arrastrandoSplitter.value) return
+  const contenedor = document.querySelector('.layout') as HTMLElement | null
+  if (!contenedor) return
+  const delta = event.clientX - inicioArrastreX
+  const porcentajeDelta = (delta / contenedor.clientWidth) * 100
+  const nuevo = Math.min(78, Math.max(45, inicioArrastrePorcentaje + porcentajeDelta))
+  tamañoPanelProductos.value = nuevo
+}
+
+const detenerSplitter = () => {
+  if (!arrastrandoSplitter.value) return
+  arrastrandoSplitter.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+const onResize = () => {
+  if (tamañoPanelProductos.value > 78) tamañoPanelProductos.value = 78
+  if (tamañoPanelProductos.value < 45) tamañoPanelProductos.value = 45
+}
+
+const abrirModalDescuento = (item: ItemCarrito) => {
+  descuentoItem.value = item
+}
+
+const cerrarModalDescuento = () => {
+  descuentoItem.value = null
+}
 const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
   if (!Array.isArray(detalles)) return []
   return detalles
@@ -91,7 +131,8 @@ const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
         nombre,
         precio,
         cantidad,
-        descuentoPct: 0
+        descuentoPct: Number(detalle.descuento_pct ?? detalle.descuentoPct ?? 0),
+        descuentoMonto: Number(detalle.descuento_monto ?? detalle.descuentoMonto ?? 0)
       }
     })
     .filter(Boolean) as ItemCarrito[]
@@ -113,10 +154,6 @@ const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
   if (typeof venta.estado === 'boolean') {
     estadoVenta.value = venta.estado
   }
-  const userRaw = venta.user_id ?? venta.userId
-  if (userRaw !== null && userRaw !== undefined && String(userRaw).trim()) {
-    userId.value = Number(userRaw)
-  }
   const detalles = venta.detalles ?? venta.items ?? []
   carrito.value = mapearItemsPendientes(detalles)
   ultimaAccion.value = `Venta #${ventaId.value} cargada`
@@ -132,6 +169,14 @@ const manejarAtajos = (event: KeyboardEvent) => {
   if (event.key === 'F10') {
     event.preventDefault()
     void cerrarVenta()
+  } else if (event.key === 'F9') {
+    event.preventDefault()
+    mostrarTicketModal.value = true
+  } else if (event.key === 'Escape') {
+    if (mostrarTicketModal.value) {
+      event.preventDefault()
+      mostrarTicketModal.value = false
+    }
   }
 }
 
@@ -144,6 +189,9 @@ const manejarClickFueraBuscador = (event: MouseEvent) => {
 }
 const clientes = ref<Cliente[]>([])
 const clienteId = ref<string | null>(null)
+const clienteSeleccionado = computed(
+  () => clientes.value.find((cliente) => cliente.id === clienteId.value) ?? null
+)
 const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
 const actualizarEstadoConexion = () => {
   isOnline.value = navigator.onLine
@@ -185,12 +233,23 @@ const cargarProductos = async () => {
   }
 
   try {
-    const respuesta = await fetch('http://127.0.0.1:8000/productos/')
+    const respuesta = await fetch('http://3.15.163.214/ApiPOS/productos/')
     if (!respuesta.ok) {
       throw new Error(`Error ${respuesta.status}`)
     }
     const data = await respuesta.json()
-    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const lista =
+      Array.isArray(data)
+        ? data
+        : Array.isArray(data.results)
+          ? data.results
+          : Array.isArray(data.data)
+            ? data.data
+            : Array.isArray((data as Record<string, unknown>)?.data?.results)
+              ? (data as Record<string, unknown>).data.results
+              : Array.isArray((data as Record<string, unknown>)?.items)
+                ? (data as Record<string, unknown>).items
+                : []
     const normalizados = lista
       .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
@@ -248,7 +307,9 @@ const cargarClientes = async () => {
         const nombre = String(cliente.nombre ?? cliente.name ?? 'Cliente')
         const documentoRaw = cliente.documento ?? cliente.identificacion ?? cliente.nit
         const documento = documentoRaw ? String(documentoRaw) : undefined
-        return { id, nombre, documento }
+        const descuentoPesos = Number(cliente.descuento_pesos ?? cliente.descuentoPesos ?? 0)
+        const descuentoPorcentaje = Number(cliente.descuento_porcentaje ?? cliente.descuentoPorcentaje ?? 0) * 100
+        return { id, nombre, documento, descuentoPesos, descuentoPorcentaje }
       })
       .filter(Boolean) as Cliente[]
     if (normalizados.length) {
@@ -259,35 +320,12 @@ const cargarClientes = async () => {
   }
 }
 
-const cargarUsuarios = async () => {
-  try {
-    const respuesta = await fetch(USUARIOS_ENDPOINT)
-    if (!respuesta.ok) {
-      throw new Error(`Error ${respuesta.status}`)
-    }
-    const data = await respuesta.json()
-    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
-    const normalizados = lista
-      .map((item: unknown, index: number) => {
-        if (!item || typeof item !== 'object') return null
-        const usuario = item as Record<string, unknown>
-        const id = Number(usuario.user_id ?? usuario.id ?? index + 1)
-        const nombre = String(usuario.nombre_completo ?? usuario.nombre ?? 'Usuario')
-        const activoRaw = usuario.activo
-        const activo = typeof activoRaw === 'boolean' ? activoRaw : true
-        return { id, nombre, activo }
-      })
-      .filter(Boolean) as Usuario[]
-    usuarios.value = normalizados.filter((usuario) => usuario.activo)
-  } catch (error) {
-    console.error('No se pudieron cargar usuarios', error)
-  }
-}
-
 onMounted(() => {
   void cargarProductos()
   void cargarClientes()
-  void cargarUsuarios()
+  window.addEventListener('mousemove', moverSplitter)
+  window.addEventListener('mouseup', detenerSplitter)
+  window.addEventListener('resize', onResize)
   window.addEventListener('online', actualizarEstadoConexion)
   window.addEventListener('offline', actualizarEstadoConexion)
   window.addEventListener('pos:cargar-pendiente', cargarPendienteEvento)
@@ -296,6 +334,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('mousemove', moverSplitter)
+  window.removeEventListener('mouseup', detenerSplitter)
+  window.removeEventListener('resize', onResize)
   window.removeEventListener('online', actualizarEstadoConexion)
   window.removeEventListener('offline', actualizarEstadoConexion)
   window.removeEventListener('pos:cargar-pendiente', cargarPendienteEvento as EventListener)
@@ -304,19 +345,21 @@ onBeforeUnmount(() => {
 })
 
 const normalizarDescuento = (valor: number | undefined) => Math.min(Math.max(valor ?? 0, 0), 100)
+const normalizarDescuentoMonto = (valor: number | undefined, maximo: number) =>
+  Math.min(Math.max(Number(valor ?? 0), 0), Math.max(maximo, 0))
+
+const calcularLinea = (item: ItemCarrito) => {
+  const base = Number(item.precio) * Number(item.cantidad)
+  const descuentoPct = normalizarDescuento(item.descuentoPct)
+  const descuentoPorcentaje = base * (descuentoPct / 100)
+  const descuentoMonto = normalizarDescuentoMonto(item.descuentoMonto, base - descuentoPorcentaje)
+  const total = Math.max(base - descuentoPorcentaje - descuentoMonto, 0)
+  return { base, descuentoPct, descuentoPorcentaje, descuentoMonto, total }
+}
 
 const resumenCarrito = computed(() => {
-  const subtotalBruto = carrito.value.reduce(
-    (total, item) => total + Number(item.precio) * Number(item.cantidad),
-    0
-  )
-
-  const subtotalConLineas = carrito.value.reduce((total, item) => {
-    const descuentoLinea = normalizarDescuento(item.descuentoPct)
-    const factor = 1 - descuentoLinea / 100
-    return total + Number(item.precio) * Number(item.cantidad) * factor
-  }, 0)
-
+  const subtotalBruto = carrito.value.reduce((total, item) => total + calcularLinea(item).base, 0)
+  const subtotalConLineas = carrito.value.reduce((total, item) => total + calcularLinea(item).total, 0)
   const descuentoLineas = subtotalBruto - subtotalConLineas
   const descuentoGlobal = 0
   const baseImponible = Math.max(subtotalConLineas - descuentoGlobal, 0)
@@ -342,8 +385,39 @@ const formatCurrency = (monto: number) =>
   })
 
 const totalLinea = (item: ItemCarrito) => {
-  const descuentoLinea = normalizarDescuento(item.descuentoPct)
-  return Number(item.precio) * Number(item.cantidad) * (1 - descuentoLinea / 100)
+  return calcularLinea(item).total
+}
+
+const descuentoPorDefectoCliente = () => {
+  const descuentoPct = Number(clienteSeleccionado.value?.descuentoPorcentaje ?? 0)
+  const descuentoMonto = Number(clienteSeleccionado.value?.descuentoPesos ?? 0)
+  if (descuentoPct > 0) {
+    return { descuentoPct, descuentoMonto: 0 }
+  }
+  if (descuentoMonto > 0) {
+    return { descuentoPct: 0, descuentoMonto }
+  }
+  return { descuentoPct: 0, descuentoMonto: 0 }
+}
+
+watch(
+  () => clienteId.value,
+  () => {
+    const descuentoCliente = descuentoPorDefectoCliente()
+    carrito.value = carrito.value.map((item) => ({
+      ...item,
+      descuentoPct: descuentoCliente.descuentoPct,
+      descuentoMonto: descuentoCliente.descuentoMonto
+    }))
+  }
+)
+
+const resumenDescuentoLinea = (item: ItemCarrito) => {
+  const { descuentoPct, descuentoMonto } = calcularLinea(item)
+  const piezas: string[] = []
+  if (descuentoPct > 0) piezas.push(`-${descuentoPct}%`)
+  if (descuentoMonto > 0) piezas.push(`-${formatCurrency(descuentoMonto)}`)
+  return piezas.join(' · ')
 }
 
 const agregarAlCarrito = (producto: Producto) => {
@@ -351,13 +425,15 @@ const agregarAlCarrito = (producto: Producto) => {
   if (existente) {
     existente.cantidad++
   } else {
+    const descuentoCliente = descuentoPorDefectoCliente()
     carrito.value.push({
       id: producto.id,
       backendId: producto.backendId,
       nombre: producto.nombre,
       precio: Number(producto.precio),
       cantidad: 1,
-      descuentoPct: 0
+      descuentoPct: descuentoCliente.descuentoPct,
+      descuentoMonto: descuentoCliente.descuentoMonto
     })
   }
   ultimaAccion.value = `${producto.nombre} añadido`
@@ -366,7 +442,12 @@ const agregarAlCarrito = (producto: Producto) => {
 const actualizarCantidad = (id: number, delta: number) => {
   const item = carrito.value.find((articulo) => articulo.id === id)
   if (!item) return
-  item.cantidad += delta
+  if (delta !== 0) {
+    item.cantidad += delta
+  }
+  if (!Number.isFinite(item.cantidad)) {
+    item.cantidad = 1
+  }
   if (item.cantidad <= 0) {
     carrito.value = carrito.value.filter((articulo) => articulo.id !== id)
     ultimaAccion.value = 'Producto removido'
@@ -398,7 +479,7 @@ const construirPayloadVenta = (estadoOverride?: boolean) => {
     tipo_pago: tipoPagoPayload,
     estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
-    user_id: userId.value,
+    user_id: 8,
     cliente_id: clienteId.value,
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
@@ -428,9 +509,6 @@ const construirPayloadActualizacion = (estadoOverride?: boolean) => {
 }
 
 const guardarVentaApi = async (estadoOverride?: boolean) => {
-  if (!userId.value) {
-    throw new Error('Selecciona un usuario antes de cobrar.')
-  }
   if (!clienteId.value) {
     throw new Error('Selecciona un cliente antes de cobrar.')
   }
@@ -453,9 +531,6 @@ const guardarVentaApi = async (estadoOverride?: boolean) => {
 }
 
 const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
-  if (!userId.value) {
-    throw new Error('Selecciona un usuario antes de cobrar.')
-  }
   if (!clienteId.value) {
     throw new Error('Selecciona un cliente antes de cobrar.')
   }
@@ -620,50 +695,17 @@ const guardarTicket = () => {
       <div class="cabecera__chips">
         <span class="chip">Caja 01</span>
         <span class="chip chip--exito">Listo para cobrar</span>
+        <SessionRoleChip />
         <span class="chip" :class="isOnline ? 'chip--online' : 'chip--offline'">
           {{ isOnline ? 'En línea' : 'Offline' }}
         </span>
       </div>
     </header>
 
-    <section class="layout">
-      <section class="panel ticket-panel" aria-label="Ticket previo">
-        <section class="ticket">
-          <header class="ticket__header">
-            <h3>Ticket</h3>
-            <div class="ticket__acciones">
-              <span>Vista previa</span>
-              <button type="button" class="ticket__boton" @click="imprimirTicket">Imprimir</button>
-              <button type="button" class="ticket__boton ticket__boton--secundario" @click="guardarTicket">
-                Guardar PDF
-              </button>
-            </div>
-          </header>
-          <ul class="ticket__lineas">
-            <li v-for="item in carrito" :key="item.id" class="ticket__linea">
-              <span class="ticket__nombre">{{ item.nombre }}</span>
-              <span class="ticket__cantidad">x{{ item.cantidad }}</span>
-              <span class="ticket__importe">{{ formatCurrency(totalLinea(item)) }}</span>
-            </li>
-            <li v-if="carrito.length === 0" class="ticket__vacio">Sin productos aun</li>
-          </ul>
-          <div class="ticket__totales">
-            <div>
-              <span>Subtotal</span>
-              <strong>{{ formatCurrency(resumenCarrito.subtotalBruto) }}</strong>
-            </div>
-            <div>
-              <span>Impuesto</span>
-              <strong>{{ formatCurrency(resumenCarrito.impuesto) }}</strong>
-            </div>
-            <div class="ticket__total">
-              <span>Total</span>
-              <strong>{{ formatCurrency(resumenCarrito.total) }}</strong>
-            </div>
-          </div>
-        </section>
-      </section>
-
+    <section
+      class="layout layout--split"
+      :style="{ gridTemplateColumns: `${tamañoPanelProductos}% 12px ${tamañoPanelDetalle}%` }"
+    >
       <section class="panel productos">
         <div class="panel__encabezado">
           <label class="cabecera__cliente">
@@ -703,6 +745,7 @@ const guardarTicket = () => {
         <header class="panel__encabezado panel__encabezado--carrito">
           <div class="botonera">
             <button type="button" class="boton secundaria" @click="limpiarCarrito">Vaciar</button>
+            <button type="button" class="boton secundaria" @click="mostrarTicketModal = true">Vista previa F9</button>
             <button type="button" class="boton" @click="cobrarRapido">Pago exacto</button>
           </div>
         </header>
@@ -711,58 +754,94 @@ const guardarTicket = () => {
           <li v-for="item in carrito" :key="item.id" class="linea">
             <div class="linea__fila">
               <div>
-                <p class="linea__titulo">{{ item.nombre }}</p>
-                <p class="linea__precio">{{ formatCurrency(item.precio) }}</p>
+                <div class="linea__principal">
+                  <p class="linea__titulo">{{ item.nombre }}</p>
+                  <button type="button" class="linea__descuento-boton" @click="abrirModalDescuento(item)">
+                    Descuento
+                  </button>
+                </div>
               </div>
               <div class="linea__acciones">
                 <button type="button" @click.stop="actualizarCantidad(item.id, -1)">-</button>
-                <span>{{ item.cantidad }}</span>
+                <input
+                  v-model.number="item.cantidad"
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="linea__cantidad"
+                  @change="actualizarCantidad(item.id, 0)"
+                />
                 <button type="button" @click.stop="actualizarCantidad(item.id, 1)">+</button>
                 <button type="button" class="linea__eliminar" @click.stop="eliminarItem(item.id)">×</button>
               </div>
               <div class="linea__totales">
                 <strong>{{ formatCurrency(totalLinea(item)) }}</strong>
-                <small v-if="item.descuentoPct">-{{ normalizarDescuento(item.descuentoPct) }}% aplicado</small>
+                <small v-if="item.descuentoPct || item.descuentoMonto">{{ resumenDescuentoLinea(item) }}</small>
+                <small v-else class="linea__descuento-vacio">Sin descuento</small>
               </div>
-            </div>
-            <div class="linea__descuento">
-              <label>
-                Desc. producto %
-                <input v-model.number="item.descuentoPct" type="number" min="0" max="100" step="1" />
-              </label>
             </div>
           </li>
           <li v-if="carrito.length === 0" class="linea lineavacia">Sin productos aun</li>
         </ul>
       </section>
 
+      <div
+        class="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-valuenow="Math.round(tamañoPanelProductos)"
+        aria-valuemin="45"
+        aria-valuemax="78"
+        @mousedown="iniciarSplitter"
+      >
+        <span class="splitter__handle"></span>
+      </div>
+
       <section class="panel detalle">
         <div class="detalle-venta">
           <label>
-            Usuario
-            <select v-model.number="userId">
-              <option :value="null">Selecciona usuario</option>
-              <option v-for="usuario in usuarios" :key="usuario.id" :value="usuario.id">
-                {{ usuario.nombre }}
-              </option>
-            </select>
-          </label>
-          <label>
-            Tipo de pago
-            <select v-model="tipoPago">
-              <option value="efectivo">Efectivo</option>
-              <option value="tarjeta">Tarjeta</option>
-              <option value="transferencia">Transferencia</option>
-              <option value="credito">Credito</option>
-              <option value="otro">Otro</option>
-            </select>
-          </label>
-          <label>
-            Estado
-            <select v-model="estadoVenta">
-              <option :value="true">Activo</option>
-              <option :value="false">Pendiente</option>
-            </select>
+            <div class="tipo-pago" role="group" aria-label="Tipo de pago">
+              <button
+                type="button"
+                class="tipo-pago__boton"
+                :class="{ activo: tipoPago === 'efectivo' }"
+                @click="tipoPago = 'efectivo'"
+              >
+                Efectivo
+              </button>
+              <button
+                type="button"
+                class="tipo-pago__boton"
+                :class="{ activo: tipoPago === 'tarjeta' }"
+                @click="tipoPago = 'tarjeta'"
+              >
+                Tarjeta
+              </button>
+              <button
+                type="button"
+                class="tipo-pago__boton"
+                :class="{ activo: tipoPago === 'transferencia' }"
+                @click="tipoPago = 'transferencia'"
+              >
+                Transferencia
+              </button>
+              <button
+                type="button"
+                class="tipo-pago__boton"
+                :class="{ activo: tipoPago === 'credito' }"
+                @click="tipoPago = 'credito'"
+              >
+                Credito
+              </button>
+              <button
+                type="button"
+                class="tipo-pago__boton"
+                :class="{ activo: tipoPago === 'otro' }"
+                @click="tipoPago = 'otro'"
+              >
+                Otro
+              </button>
+            </div>
           </label>
         </div>
 
@@ -807,6 +886,84 @@ const guardarTicket = () => {
         <pre v-if="respuestaVenta" class="payload">{{ respuestaVenta }}</pre>
       </section>
     </section>
+
+    <div
+      v-if="mostrarTicketModal"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="mostrarTicketModal = false"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Ticket</h2>
+          <button type="button" class="modal__cerrar" @click="mostrarTicketModal = false">x</button>
+        </div>
+        <section class="ticket">
+          <header class="ticket__header">
+            <h3>Ticket</h3>
+            <div class="ticket__acciones">
+              <span>Vista previa</span>
+              <button type="button" class="ticket__boton" @click="imprimirTicket">Imprimir</button>
+              <button type="button" class="ticket__boton ticket__boton--secundario" @click="guardarTicket">
+                Guardar PDF
+              </button>
+            </div>
+          </header>
+          <ul class="ticket__lineas">
+            <li v-for="item in carrito" :key="item.id" class="ticket__linea">
+              <span class="ticket__nombre">{{ item.nombre }}</span>
+              <span class="ticket__cantidad">x{{ item.cantidad }}</span>
+              <span class="ticket__importe">{{ formatCurrency(totalLinea(item)) }}</span>
+            </li>
+            <li v-if="carrito.length === 0" class="ticket__vacio">Sin productos aun</li>
+          </ul>
+          <div class="ticket__totales">
+            <div>
+              <span>Subtotal</span>
+              <strong>{{ formatCurrency(resumenCarrito.subtotalBruto) }}</strong>
+            </div>
+            <div>
+              <span>Impuesto</span>
+              <strong>{{ formatCurrency(resumenCarrito.impuesto) }}</strong>
+            </div>
+            <div class="ticket__total">
+              <span>Total</span>
+              <strong>{{ formatCurrency(resumenCarrito.total) }}</strong>
+            </div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <div
+      v-if="descuentoItem"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cerrarModalDescuento"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Descuento</h2>
+          <button type="button" class="modal__cerrar" @click="cerrarModalDescuento">x</button>
+        </div>
+        <p class="modal__subtitulo">{{ descuentoItem?.nombre }}</p>
+        <div class="modal__form">
+          <label>
+            Desc. %
+            <input v-model.number="descuentoItem.descuentoPct" type="number" min="0" max="100" step="1" />
+          </label>
+          <label>
+            Desc. $
+            <input v-model.number="descuentoItem.descuentoMonto" type="number" min="0" step="100" />
+          </label>
+        </div>
+        <div class="modal__acciones">
+          <button type="button" class="boton secundaria" @click="cerrarModalDescuento">Listo</button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -892,8 +1049,12 @@ const guardarTicket = () => {
 
 .layout {
   display: grid;
-  grid-template-columns: 1.05fr 1.6fr 1fr;
+  grid-template-columns: 1.6fr 1fr;
   gap: 1rem;
+}
+
+.layout--split {
+  align-items: stretch;
 }
 
 .panel {
@@ -906,15 +1067,30 @@ const guardarTicket = () => {
   gap: 1rem;
 }
 
+.splitter {
+  position: relative;
+  cursor: col-resize;
+  border-radius: 1rem;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.splitter__handle {
+  width: 4px;
+  height: 50px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.7);
+  box-shadow: 0 0 12px rgba(250, 204, 21, 0.6);
+}
+
 .productos {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  max-height: 70vh;
-}
-
-.ticket-panel {
-  max-height: 70vh;
+  max-height: none;
 }
 
 .panel__encabezado {
@@ -1017,23 +1193,23 @@ const guardarTicket = () => {
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 0.7rem;
-  overflow-y: auto;
+  gap: 0.5rem;
+  overflow: visible;
 }
 
 .linea {
   display: grid;
-  gap: 0.6rem;
-  padding: 0.75rem 0.9rem;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 0.85rem;
-  background: #0f1015;
+  gap: 0.45rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.75rem;
+  background: rgba(13, 15, 20, 0.9);
 }
 
 .linea__fila {
   display: grid;
   grid-template-columns: 1fr auto auto;
-  gap: 0.75rem;
+  gap: 0.6rem;
   align-items: center;
 }
 
@@ -1044,13 +1220,26 @@ const guardarTicket = () => {
 }
 
 .linea__titulo {
-  margin: 0 0 0.25rem;
+  margin: 0;
   font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.linea__principal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.linea__titulo {
+  margin-right: auto;
 }
 
 .linea__precio {
-  margin: 0;
-  color: #d4d8df;
+  margin: 0.1rem 0 0;
+  color: #94a3b8;
+  font-size: 0.8rem;
 }
 
 .linea__acciones {
@@ -1063,10 +1252,21 @@ const guardarTicket = () => {
   border: 1px solid rgba(148, 163, 184, 0.4);
   background: rgba(120, 126, 137, 0.12);
   color: #e2e8f0;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 0.5rem;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.6rem;
   cursor: pointer;
+}
+
+.linea__cantidad {
+  width: 56px;
+  text-align: center;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(12, 13, 16, 0.92);
+  color: #e2e8f0;
+  padding: 0.2rem 0.35rem;
+  font-weight: 600;
 }
 
 .linea__acciones .linea__eliminar {
@@ -1086,41 +1286,38 @@ const guardarTicket = () => {
 }
 
 .linea__totales small {
-  color: #d4d8df;
+  color: #facc15;
+  font-size: 0.75rem;
 }
 
-.linea__descuento {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.linea__descuento label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
+.linea__descuento-boton {
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(12, 13, 16, 0.6);
   color: #e2e8f0;
-  font-weight: 600;
-}
-
-.linea__descuento input {
-  width: 90px;
   border-radius: 0.6rem;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  padding: 0.35rem 0.5rem;
-  background: rgba(12, 13, 16, 0.92);
-  color: #e2e8f0;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.linea__descuento-vacio {
+  color: #94a3b8;
+  font-size: 0.75rem;
 }
 
 .controles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0.7rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding-top: 0.25rem;
 }
 
 .detalle-venta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0.7rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
 }
 
 .detalle-venta label {
@@ -1134,9 +1331,43 @@ const guardarTicket = () => {
 .detalle-venta select {
   border-radius: 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
-  padding: 0.55rem 0.75rem;
+  padding: 0.6rem 0.8rem;
   background: rgba(12, 13, 16, 0.92);
   color: #e2e8f0;
+}
+
+.tipo-pago {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.detalle-venta .tipo-pago {
+  grid-column: 1 / -1;
+}
+
+.tipo-pago__boton {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(12, 13, 16, 0.92);
+  color: #e2e8f0;
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.tipo-pago__boton.activo {
+  border-color: rgba(250, 204, 21, 0.75);
+  background: linear-gradient(120deg, rgba(250, 204, 21, 0.18), rgba(250, 204, 21, 0.32));
+  color: #0b0d12;
+  box-shadow: 0 6px 18px rgba(250, 204, 21, 0.25);
+  transform: translateY(-1px);
+}
+
+.tipo-pago__boton:focus-visible {
+  outline: none;
+  border-color: rgba(250, 204, 21, 0.7);
 }
 
 .controles label {
@@ -1149,24 +1380,27 @@ const guardarTicket = () => {
 .controles input {
   border-radius: 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
-  padding: 0.55rem 0.75rem;
+  padding: 0.6rem 0.8rem;
   background: rgba(12, 13, 16, 0.92);
   color: #e2e8f0;
 }
 
 .totales {
   margin: 0;
-  padding: 0;
+  padding: 0.6rem 0.75rem;
   display: grid;
-  gap: 0.5rem;
+  gap: 0.55rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(12, 13, 16, 0.65);
 }
 
 .totales div {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.4rem 0.25rem;
-  border-bottom: 1px dashed rgba(148, 163, 184, 0.25);
+  padding: 0.35rem 0.1rem;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
 }
 
 .totales dt,
@@ -1175,7 +1409,7 @@ const guardarTicket = () => {
 }
 
 .totales .total {
-  font-size: 1.2rem;
+  font-size: 1.25rem;
   font-weight: 700;
   color: #facc15;
 }
@@ -1291,17 +1525,90 @@ const guardarTicket = () => {
   color: #facc15;
 }
 
-.acciones-finales {
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.7);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  z-index: 60;
+}
+
+.modal__contenido {
+  width: min(520px, 92vw);
+  max-height: 85vh;
+  overflow: auto;
+  background: #0b0d12;
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  padding: 1rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+.modal__encabezado {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.modal__encabezado h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal__subtitulo {
+  margin: 0 0 0.75rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.modal__form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.modal__form label {
+  display: grid;
+  gap: 0.35rem;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.modal__form input {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.6rem 0.8rem;
+  background: rgba(12, 13, 16, 0.92);
+  color: #e2e8f0;
+}
+
+.modal__acciones {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.9rem;
+}
+
+.modal__cerrar {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 18, 26, 0.9);
+  color: #e2e8f0;
+  border-radius: 0.6rem;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+
+.acciones-finales {
+  display: grid;
   gap: 0.75rem;
+  padding-top: 0.25rem;
 }
 
 .acciones-finales__botones {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
 }
 
 .payload {
@@ -1352,6 +1659,14 @@ const guardarTicket = () => {
   .layout {
     grid-template-columns: 1fr 1fr;
   }
+
+  .layout--split {
+    grid-template-columns: 1fr !important;
+  }
+
+  .splitter {
+    display: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1375,3 +1690,5 @@ const guardarTicket = () => {
   }
 }
 </style>
+
+

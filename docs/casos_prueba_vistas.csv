@@ -1,6 +1,6 @@
 ID,Vista,Caso,Precondiciones,Pasos,Resultado esperado,Notas
 POS-001,POS,Carga productos activos,API /productos responde con datos,"1. Abrir vista POS
-2. Esperar carga de productos",Se muestran productos activos y categorias,Endpoint http://127.0.0.1:8000/productos/
+2. Esperar carga de productos",Se muestran productos activos y categorias,Endpoint http://3.15.163.214/ApiPOS/productos/
 POS-002,POS,Busqueda por nombre/codigo,Productos cargados,"1. Escribir nombre parcial en buscador
 2. Escribir codigo de barras",Lista sugiere coincidencias por nombre o codigo,Placeholder correcto
 POS-003,POS,Agregar producto al carrito,Productos cargados,"1. Clic en sugerencia
@@ -41,3 +41,4 @@ ADM-CA-003,Admin - Categorias,Cambiar estado,Categoria existente,1. Clic Activar
 STK-001,Stock,Visualizar stock,Productos cargados,1. Abrir Stock,Listado de stock visible,
 FIN-001,Finanzas,Visualizar panel,Datos mock/servicio,1. Abrir Finanzas,Panel visible sin errores,
 PEND-001,Pendientes,Visualizar panel,Datos mock/servicio,1. Abrir Pendientes,Panel visible sin errores,
+

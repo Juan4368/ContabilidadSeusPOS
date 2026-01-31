@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 
 import { crearCartera } from '../services/cartera'
 import { crearIngreso } from '../services/ingresos'
@@ -113,6 +114,7 @@ onBeforeUnmount(() => {
         <p>Registros guardados sin conexión.</p>
       </div>
       <div class="pendientes__acciones">
+        <SessionRoleChip />
         <span class="chip" :class="isOnline ? 'chip--online' : 'chip--offline'">
           {{ isOnline ? 'En línea' : 'Offline' }}
         </span>

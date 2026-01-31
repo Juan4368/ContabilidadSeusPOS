@@ -11,7 +11,7 @@ export type MovimientoFinancieroPayload = {
 }
 
 const MOVIMIENTOS_FINANCIEROS_ENDPOINT =
-  'http://127.0.0.1:8000/contabilidad/movimientos-financieros/'
+  'http://3.15.163.214/ApiPOS/contabilidad/movimientos-financieros/'
 
 const request = async <T>(options?: RequestInit): Promise<T> => {
   const respuesta = await fetch(MOVIMIENTOS_FINANCIEROS_ENDPOINT, options)
@@ -31,3 +31,4 @@ export const crearMovimientoFinanciero = (payload: MovimientoFinancieroPayload) 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   })
+

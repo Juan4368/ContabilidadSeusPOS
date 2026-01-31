@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 
 type PendingItem = {
   id: number
@@ -10,8 +11,8 @@ type PendingItem = {
   items: number
 }
 
-const VENTAS_ENDPOINT = 'http://127.0.0.1:8000/ventas/'
-const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
+const VENTAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/ventas/'
+const CLIENTES_ENDPOINT = 'http://3.15.163.214/ApiPOS/clientes/'
 const pendientes = ref<PendingItem[]>([])
 const clientesMap = new Map<string, string>()
 
@@ -115,7 +116,10 @@ onBeforeUnmount(() => {
         <h1>Ventas pendientes</h1>
         <p>Selecciona una venta para continuarla en POS.</p>
       </div>
-      <button type="button" class="boton secundario" @click="cargarPendientes">Recargar</button>
+      <div class="pendientes-venta__acciones">
+        <SessionRoleChip />
+        <button type="button" class="boton secundario" @click="cargarPendientes">Recargar</button>
+      </div>
     </header>
 
     <section class="panel">
@@ -147,6 +151,13 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.pendientes-venta__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
 .pendientes-venta__prefijo {
@@ -250,3 +261,4 @@ onBeforeUnmount(() => {
   }
 }
 </style>
+

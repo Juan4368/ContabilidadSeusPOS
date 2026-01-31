@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import SessionRoleChip from '../components/SessionRoleChip.vue'
 
 type Usuario = {
   id: number
@@ -27,6 +28,8 @@ type Cliente = {
   nombre: string
   telefono: string
   email: string
+  descuentoPesos?: number
+  descuentoPorcentaje?: number
   createdAt: string
 }
 
@@ -39,10 +42,10 @@ type Proveedor = {
 
 const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 
-const USUARIOS_ENDPOINT = 'http://3.15.163.214/ApiPOS/usuarios/'
+const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
 const CATEGORIAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/categorias/'
-const CATEGORIAS_CONTABILIDAD_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/categorias/'
-const PROVEEDORES_ENDPOINT = 'http://127.0.0.1:8000/proveedores/'
+const CATEGORIAS_CONTABILIDAD_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/categorias/'
+const PROVEEDORES_ENDPOINT = 'http://3.15.163.214/ApiPOS/proveedores/'
 
 const usuarios = reactive<Usuario[]>([])
 
@@ -56,16 +59,22 @@ const clientes = reactive<Cliente[]>([])
 const proveedores = reactive<Proveedor[]>([])
 
 const usuarioForm = reactive({
-  nombre: '',
+  username: '',
   email: '',
   contrasena: '',
-  numeroContacto: '',
-  role: 'administrador',
-  activo: true
+  telefono: '',
+  activo: true,
+  verificado: true
 })
 const categoriaForm = reactive({ nombre: '', descripcion: '' })
 const categoriaContabilidadForm = reactive({ nombre: '', tipo_categoria: 'INGRESO' })
-const clienteForm = reactive({ nombre: '', telefono: '', email: '' })
+const clienteForm = reactive({
+  nombre: '',
+  telefono: '',
+  email: '',
+  descuentoPesos: 0,
+  descuentoPorcentaje: 0
+})
 const proveedorForm = reactive({ nombre: '', telefono: '', email: '' })
 
 const accionesAdmin = [
@@ -86,6 +95,8 @@ const mostrarCategoriaCrear = ref(false)
 const mostrarCategoriaContabilidadCrear = ref(false)
 const mostrarClienteCrear = ref(false)
 const mostrarProveedorCrear = ref(false)
+const clienteEditandoId = ref<string | null>(null)
+const cargandoClientes = ref(false)
 
 const errorUsuario = ref('')
 const errorCategoria = ref('')
@@ -107,10 +118,22 @@ const cargarUsuarios = async () => {
   try {
     const respuesta = await fetch(USUARIOS_ENDPOINT)
     if (!respuesta.ok) {
-      throw new Error(`Error ${respuesta.status}`)
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = await respuesta.json()
-    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const lista =
+      Array.isArray(data)
+        ? data
+        : Array.isArray(data.results)
+          ? data.results
+          : Array.isArray(data.data)
+            ? data.data
+            : Array.isArray((data as Record<string, unknown>)?.data?.results)
+              ? (data as Record<string, unknown>).data.results
+              : Array.isArray((data as Record<string, unknown>)?.items)
+                ? (data as Record<string, unknown>).items
+                : []
     const normalizados = lista
       .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
@@ -130,12 +153,12 @@ const cargarUsuarios = async () => {
 }
 
 const limpiarUsuario = () => {
-  usuarioForm.nombre = ''
+  usuarioForm.username = ''
   usuarioForm.email = ''
   usuarioForm.contrasena = ''
-  usuarioForm.numeroContacto = ''
-  usuarioForm.role = 'administrador'
+  usuarioForm.telefono = ''
   usuarioForm.activo = true
+  usuarioForm.verificado = true
 }
 
 const limpiarCategoria = () => {
@@ -152,6 +175,9 @@ const limpiarCliente = () => {
   clienteForm.nombre = ''
   clienteForm.telefono = ''
   clienteForm.email = ''
+  clienteForm.descuentoPesos = 0
+  clienteForm.descuentoPorcentaje = 0
+  clienteEditandoId.value = null
 }
 
 const limpiarProveedor = () => {
@@ -193,6 +219,7 @@ const abrirModalAdmin = (id: string) => {
     mostrarCategoriaContabilidadForm.value = true
   } else if (id === 'cliente') {
     mostrarClienteForm.value = true
+    void cargarClientes()
   } else if (id === 'proveedor') {
     mostrarProveedorForm.value = true
     void cargarProveedores()
@@ -225,6 +252,7 @@ const cerrarModalCliente = () => {
   errorCliente.value = ''
   exitoCliente.value = ''
   mostrarClienteCrear.value = false
+  limpiarCliente()
 }
 
 const cerrarModalProveedor = () => {
@@ -234,56 +262,79 @@ const cerrarModalProveedor = () => {
   mostrarProveedorCrear.value = false
 }
 
+const extraerListaClientes = (data: unknown): unknown[] => {
+  if (Array.isArray(data)) return data
+  if (!data || typeof data !== 'object') return []
+  const raw = data as Record<string, unknown>
+  if (Array.isArray(raw.data)) return raw.data
+  if (Array.isArray(raw.results)) return raw.results
+  if (raw.data && typeof raw.data === 'object' && Array.isArray((raw.data as Record<string, unknown>).results)) {
+    return (raw.data as Record<string, unknown>).results as unknown[]
+  }
+  return []
+}
+
+const normalizarCliente = (item: unknown): Cliente | null => {
+  if (!item || typeof item !== 'object') return null
+  const cliente = item as Record<string, unknown>
+  return {
+    id: String(cliente.id ?? cliente.cliente_id ?? ''),
+    nombre: String(cliente.nombre ?? ''),
+    telefono: String(cliente.telefono ?? ''),
+    email: String(cliente.email ?? ''),
+    descuentoPesos: Number(cliente.descuento_pesos ?? 0),
+    descuentoPorcentaje: Number(cliente.descuento_porcentaje ?? 0) * 100,
+    createdAt: String(cliente.created_at ?? '')
+  }
+}
+
 const cargarClientes = async () => {
+  errorCliente.value = ''
+  cargandoClientes.value = true
   try {
     const respuesta = await fetch(CLIENTES_ENDPOINT)
     if (!respuesta.ok) {
-      throw new Error(`Error ${respuesta.status}`)
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = await respuesta.json()
-    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
-    const normalizados = lista
-      .map((item: unknown) => {
-        if (!item || typeof item !== 'object') return null
-        const cliente = item as Record<string, unknown>
-        return {
-          id: String(cliente.id ?? cliente.cliente_id ?? ''),
-          nombre: String(cliente.nombre ?? ''),
-          telefono: String(cliente.telefono ?? ''),
-          email: String(cliente.email ?? ''),
-          createdAt: String(cliente.created_at ?? cliente.createdAt ?? '')
-        }
-      })
-      .filter(Boolean) as Cliente[]
+    const lista = extraerListaClientes(data)
+    const normalizados = lista.map(normalizarCliente).filter(Boolean) as Cliente[]
     clientes.splice(0, clientes.length, ...normalizados)
   } catch (error) {
     console.error('No se pudieron cargar clientes', error)
+    const detalle = error instanceof Error ? error.message : String(error)
+    errorCliente.value = `No se pudieron cargar los clientes. ${detalle}`
+  } finally {
+    cargandoClientes.value = false
   }
 }
 
 const crearUsuario = async () => {
   errorUsuario.value = ''
   exitoUsuario.value = ''
-  const nombre = usuarioForm.nombre.trim()
+  const username = usuarioForm.username.trim()
   const email = usuarioForm.email.trim().toLowerCase()
   const contrasena = usuarioForm.contrasena.trim()
-  const numeroContacto = usuarioForm.numeroContacto.trim()
+  const telefono = usuarioForm.telefono.trim()
 
-  if (!nombre || !email || !contrasena || !numeroContacto) {
-    errorUsuario.value = 'Completa nombre, email, contraseña y contacto.'
+  if (!username || !email || !contrasena || !telefono) {
+    errorUsuario.value = 'Completa usuario, email, contraseña y teléfono.'
     return
   }
 
   try {
+    const ahora = new Date().toISOString()
     const payload = {
-      correo: email,
-      contrasena_hash: contrasena,
-      numero_contacto: numeroContacto,
-      role: usuarioForm.role,
-      activo: usuarioForm.activo,
-      nombre_completo: nombre,
-      creado_at: new Date().toISOString(),
-      actualizado_at: new Date().toISOString()
+      username,
+      email,
+      password_hash: contrasena,
+      thelefone_number: telefono,
+      is_active: usuarioForm.activo,
+      is_verified: usuarioForm.verificado,
+      last_login_at: ahora,
+      created_at: ahora,
+      updated_at: ahora
     }
 
     const respuesta = await fetch(USUARIOS_ENDPOINT, {
@@ -298,9 +349,9 @@ const crearUsuario = async () => {
     const data = (await respuesta.json()) as Record<string, unknown>
     usuarios.unshift({
       id: Number(data.user_id ?? data.id ?? Date.now()),
-      nombre: String(data.nombre_completo ?? nombre),
-      email: String(data.correo ?? email),
-      estado: data.activo === false ? 'inactivo' : 'activo'
+      nombre: String(data.username ?? username),
+      email: String(data.email ?? email),
+      estado: data.is_active === false ? 'inactivo' : 'activo'
     })
     limpiarUsuario()
     exitoUsuario.value = 'Usuario creado correctamente.'
@@ -385,9 +436,13 @@ const crearCliente = async () => {
   const nombre = clienteForm.nombre.trim()
   const telefono = clienteForm.telefono.trim()
   const email = clienteForm.email.trim().toLowerCase()
+  const telefonoPayload = telefono || null
+  const emailPayload = email || null
+  const descuentoPesos = Number(clienteForm.descuentoPesos || 0)
+  const descuentoPorcentaje = Number(clienteForm.descuentoPorcentaje || 0) / 100
 
-  if (!nombre || !telefono || !email) {
-    errorCliente.value = 'Completa nombre, telefono y email.'
+  if (!nombre) {
+    errorCliente.value = 'Completa el nombre.'
     return
   }
 
@@ -395,19 +450,28 @@ const crearCliente = async () => {
     const respuesta = await fetch(CLIENTES_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, telefono, email })
+      body: JSON.stringify({
+        nombre,
+        telefono: telefonoPayload,
+        email: emailPayload,
+        descuento_pesos: descuentoPesos,
+        descuento_porcentaje: descuentoPorcentaje
+      })
     })
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
-    const data = (await respuesta.json()) as Record<string, unknown>
+    const data = (await respuesta.json().catch(() => ({}))) as Record<string, unknown>
+    const payload = (data.data as Record<string, unknown> | undefined) ?? data
     const nuevo: Cliente = {
-      id: String(data.id ?? data.cliente_id ?? Date.now()),
-      nombre: String(data.nombre ?? nombre),
-      telefono: String(data.telefono ?? telefono),
-      email: String(data.email ?? email),
-      createdAt: String(data.created_at ?? new Date().toISOString())
+      id: String(payload.id ?? payload.cliente_id ?? Date.now()),
+      nombre: String(payload.nombre ?? nombre),
+      telefono: String(payload.telefono ?? telefonoPayload ?? ''),
+      email: String(payload.email ?? emailPayload ?? ''),
+      descuentoPesos: Number(payload.descuento_pesos ?? descuentoPesos),
+      descuentoPorcentaje: Number(payload.descuento_porcentaje ?? descuentoPorcentaje) * 100,
+      createdAt: String(payload.created_at ?? new Date().toISOString())
     }
     clientes.unshift(nuevo)
     limpiarCliente()
@@ -417,6 +481,87 @@ const crearCliente = async () => {
     console.error('Error al crear cliente', error)
     errorCliente.value = 'No fue posible crear el cliente.'
   }
+}
+
+const actualizarCliente = async (id: string) => {
+  errorCliente.value = ''
+  exitoCliente.value = ''
+  const nombre = clienteForm.nombre.trim()
+  const telefono = clienteForm.telefono.trim()
+  const email = clienteForm.email.trim().toLowerCase()
+  const telefonoPayload = telefono || null
+  const emailPayload = email || null
+  const descuentoPesos = Number(clienteForm.descuentoPesos || 0)
+  const descuentoPorcentaje = Number(clienteForm.descuentoPorcentaje || 0) / 100
+
+  if (!nombre) {
+    errorCliente.value = 'Completa el nombre.'
+    return
+  }
+
+  try {
+    const respuesta = await fetch(`${CLIENTES_ENDPOINT}${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nombre,
+        telefono: telefonoPayload,
+        email: emailPayload,
+        descuento_pesos: descuentoPesos,
+        descuento_porcentaje: descuentoPorcentaje
+      })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json().catch(() => ({}))) as Record<string, unknown>
+    const payload = (data.data as Record<string, unknown> | undefined) ?? data
+    const index = clientes.findIndex((item) => item.id === id)
+    if (index >= 0) {
+      clientes[index] = {
+        ...clientes[index],
+        nombre: String(payload.nombre ?? nombre),
+        telefono: String(payload.telefono ?? telefonoPayload ?? ''),
+        email: String(payload.email ?? emailPayload ?? ''),
+        descuentoPesos: Number(payload.descuento_pesos ?? descuentoPesos),
+        descuentoPorcentaje: Number(payload.descuento_porcentaje ?? descuentoPorcentaje) * 100
+      }
+    }
+    exitoCliente.value = 'Cliente actualizado correctamente.'
+    limpiarCliente()
+    mostrarClienteCrear.value = false
+  } catch (error) {
+    console.error('Error al actualizar cliente', error)
+    errorCliente.value = 'No fue posible actualizar el cliente.'
+  }
+}
+
+const guardarCliente = async () => {
+  if (clienteEditandoId.value) {
+    await actualizarCliente(clienteEditandoId.value)
+  } else {
+    await crearCliente()
+  }
+}
+
+const iniciarEdicionCliente = (cliente: Cliente) => {
+  mostrarClienteCrear.value = true
+  clienteEditandoId.value = cliente.id
+  clienteForm.nombre = cliente.nombre
+  clienteForm.telefono = cliente.telefono
+  clienteForm.email = cliente.email
+  clienteForm.descuentoPesos = Number(cliente.descuentoPesos ?? 0)
+  clienteForm.descuentoPorcentaje = Number(cliente.descuentoPorcentaje ?? 0)
+  errorCliente.value = ''
+  exitoCliente.value = ''
+}
+
+const cancelarEdicionCliente = () => {
+  limpiarCliente()
+  mostrarClienteCrear.value = false
+  errorCliente.value = ''
+  exitoCliente.value = ''
 }
 
 const crearProveedor = async () => {
@@ -679,6 +824,7 @@ onMounted(() => {
         <span>Total clientes: {{ totalClientes }}</span>
       </div>
       <div class="admin__acciones">
+        <SessionRoleChip />
         <button type="button" class="secundario" @click="limpiarCacheProductosPos">Limpiar cache POS</button>
         <span v-if="avisoCache" class="aviso">{{ avisoCache }}</span>
       </div>
@@ -721,34 +867,33 @@ onMounted(() => {
         </div>
         <form v-if="mostrarUsuarioCrear" class="form" @submit.prevent="crearUsuario">
           <label>
-            <span>Nombre</span>
-            <input v-model="usuarioForm.nombre" type="text" placeholder="Nombre completo" />
+            <span>Usuario</span>
+            <input v-model="usuarioForm.username" type="text" placeholder="usuario" />
           </label>
           <label>
             <span>Email</span>
             <input v-model="usuarioForm.email" type="email" placeholder="correo@empresa.com" />
           </label>
           <label>
-            <span>Contacto</span>
-            <input v-model="usuarioForm.numeroContacto" type="text" placeholder="3001234567" />
+            <span>Telefono</span>
+            <input v-model="usuarioForm.telefono" type="text" placeholder="3001234567" />
           </label>
           <label>
             <span>Contrasena</span>
             <input v-model="usuarioForm.contrasena" type="password" placeholder="********" />
           </label>
           <label>
-            <span>Rol</span>
-            <select v-model="usuarioForm.role">
-              <option value="administrador">Administrador</option>
-              <option value="cajero">Cajero</option>
-              <option value="supervisor">Supervisor</option>
-            </select>
-          </label>
-          <label>
             <span>Estado</span>
             <select v-model="usuarioForm.activo">
               <option :value="true">Activo</option>
               <option :value="false">Inactivo</option>
+            </select>
+          </label>
+          <label>
+            <span>Verificado</span>
+            <select v-model="usuarioForm.verificado">
+              <option :value="true">Si</option>
+              <option :value="false">No</option>
             </select>
           </label>
           <button type="submit">Crear usuario</button>
@@ -907,8 +1052,9 @@ onMounted(() => {
           <button type="button" class="secundario" @click="mostrarClienteCrear = !mostrarClienteCrear">
             {{ mostrarClienteCrear ? 'Ocultar formulario' : 'Crear cliente' }}
           </button>
+          <span v-if="cargandoClientes" class="aviso">Cargando...</span>
         </div>
-        <form v-if="mostrarClienteCrear" class="form" @submit.prevent="crearCliente">
+        <form v-if="mostrarClienteCrear" class="form" @submit.prevent="guardarCliente">
           <label>
             <span>Nombre</span>
             <input v-model="clienteForm.nombre" type="text" placeholder="Nombre completo" />
@@ -921,7 +1067,18 @@ onMounted(() => {
             <span>Email</span>
             <input v-model="clienteForm.email" type="email" placeholder="cliente@correo.com" />
           </label>
-          <button type="submit">Crear cliente</button>
+          <label>
+            <span>Descuento $</span>
+            <input v-model.number="clienteForm.descuentoPesos" type="number" min="0" step="100" />
+          </label>
+          <label>
+            <span>Descuento %</span>
+            <input v-model.number="clienteForm.descuentoPorcentaje" type="number" min="0" max="100" step="1" />
+          </label>
+          <button type="submit">{{ clienteEditandoId ? 'Actualizar cliente' : 'Crear cliente' }}</button>
+          <button v-if="clienteEditandoId" type="button" class="secundario" @click="cancelarEdicionCliente">
+            Cancelar edicion
+          </button>
           <p v-if="errorCliente" class="error">{{ errorCliente }}</p>
           <p v-if="exitoCliente" class="exito">{{ exitoCliente }}</p>
         </form>
@@ -930,9 +1087,16 @@ onMounted(() => {
             <div>
               <strong>{{ cliente.nombre }}</strong>
               <small>{{ cliente.telefono }} - {{ cliente.email }}</small>
+              <small v-if="cliente.descuentoPesos || cliente.descuentoPorcentaje">
+                Descuento:
+                <span v-if="cliente.descuentoPesos">{{ cliente.descuentoPesos }}$</span>
+                <span v-if="cliente.descuentoPesos && cliente.descuentoPorcentaje"> · </span>
+                <span v-if="cliente.descuentoPorcentaje">{{ cliente.descuentoPorcentaje }}%</span>
+              </small>
             </div>
             <div class="acciones">
               <span class="estado">{{ cliente.createdAt ? 'Registrado' : 'Nuevo' }}</span>
+              <button type="button" class="secundario" @click="iniciarEdicionCliente(cliente)">Actualizar</button>
             </div>
           </li>
         </ul>
