@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import SessionRoleChip from '../components/SessionRoleChip.vue'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { crearMovimientoFinanciero, type MovimientoFinancieroPayload } from '../services/movimientosFinancieros'
+import { ENDPOINTS } from '../config/endpoints'
 
 const resumen = [
   { titulo: 'Ingresos', valor: '$ 0', detalle: 'Mes actual', estado: 'estable' },
@@ -11,13 +12,13 @@ const resumen = [
 ]
 
 const acciones = [
-  { titulo: 'Movimientos financieros', descripcion: 'Ajustes y salidas especiales.' },
-  { titulo: 'Categorias contables', descripcion: 'Gestiona tus categorias.' },
+  { titulo: 'Entradas y salidas', descripcion: '' },
   { titulo: 'Reportes', descripcion: 'Resumenes y cortes.' }
 ]
 
 const mostrarFormularioMovimiento = ref(false)
 const mostrarFormularioCategoria = ref(false)
+const categoriasHabilitadas = false
 
 const mensaje = ref<string | null>(null)
 const mensajeTipo = ref<'exito' | 'error' | null>(null)
@@ -53,13 +54,26 @@ const formularioMovimiento = ref<MovimientoFinancieroPayload>({
   fecha: toDateTimeLocal(new Date()),
   tipo: 'EGRESO',
   monto: 0,
-  concepto: '',
-  categoria_contabilidad_id: 0,
+  nota: '',
   proveedor_id: 0,
   caja_id: 1,
   usuario_id: 8,
   venta_id: null
 })
+
+const formatCurrencyInput = (valor: number) =>
+  Math.max(Number(valor || 0), 0).toLocaleString('es-CO', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  })
+
+const montoMovimientoInput = computed(() => formatCurrencyInput(formularioMovimiento.value.monto))
+
+const actualizarMontoMovimiento = (event: Event) => {
+  const value = (event.target as HTMLInputElement).value
+  const limpio = value.replace(/\D+/g, '')
+  formularioMovimiento.value.monto = Number(limpio || 0)
+}
 
 const guardandoMovimiento = ref(false)
 const errorMovimiento = ref<string | null>(null)
@@ -77,29 +91,8 @@ const registrarMovimiento = async () => {
   errorMovimiento.value = null
   mensaje.value = null
   mensajeTipo.value = null
-  if (
-    !formularioMovimiento.value.categoria_contabilidad_id ||
-    formularioMovimiento.value.categoria_contabilidad_id <= 0
-  ) {
-    errorMovimiento.value = 'Selecciona una categoria contable.'
-    guardandoMovimiento.value = false
-    return
-  }
-  const categoriaSeleccionada = categoriasContables.value.find(
-    (categoria) => categoria.id === formularioMovimiento.value.categoria_contabilidad_id
-  )
-  if (!categoriaSeleccionada) {
-    errorMovimiento.value = 'Categoria contable no encontrada.'
-    guardandoMovimiento.value = false
-    return
-  }
   if (formularioMovimiento.value.monto <= 0) {
     errorMovimiento.value = 'El monto debe ser mayor a cero.'
-    guardandoMovimiento.value = false
-    return
-  }
-  if (formularioMovimiento.value.proveedor_id <= 0) {
-    errorMovimiento.value = 'Proveedor invalido.'
     guardandoMovimiento.value = false
     return
   }
@@ -116,7 +109,6 @@ const registrarMovimiento = async () => {
   const payload: MovimientoFinancieroPayload = {
     ...formularioMovimiento.value,
     fecha: fechaIso,
-    concepto: categoriaSeleccionada.nombre,
     venta_id: ventaId && ventaId > 0 ? ventaId : null
   }
   try {
@@ -141,8 +133,7 @@ const cerrarFormularioMovimiento = () => {
     fecha: toDateTimeLocal(new Date()),
     tipo: 'EGRESO',
     monto: 0,
-    concepto: '',
-    categoria_contabilidad_id: 0,
+    nota: '',
     proveedor_id: 0,
     caja_id: 1,
     usuario_id: 8,
@@ -158,7 +149,7 @@ const cargarCategoriasContables = async () => {
   cargandoCategorias.value = true
   errorCategorias.value = null
   try {
-    const respuesta = await fetch('http://3.15.163.214/ApiPOS/contabilidad/categorias/')
+    const respuesta = await fetch(ENDPOINTS.CONTABILIDAD_CATEGORIAS)
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
@@ -181,7 +172,7 @@ const cargarProveedores = async (forzar = false) => {
   cargandoProveedores.value = true
   errorProveedores.value = null
   try {
-    const respuesta = await fetch('http://3.15.163.214/ApiPOS/proveedores/')
+    const respuesta = await fetch(ENDPOINTS.CONTABILIDAD_PROVEEDORES)
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
@@ -249,7 +240,7 @@ const abrirFormularioMovimiento = () => {
     tipo: 'EGRESO',
     monto: 0,
     concepto: '',
-    categoria_contabilidad_id: 0,
+    nota: '',
     proveedor_id: 0,
     caja_id: 1,
     usuario_id: 8,
@@ -260,6 +251,9 @@ const abrirFormularioMovimiento = () => {
 }
 
 const abrirFormularioCategoria = () => {
+  if (!categoriasHabilitadas) {
+    return
+  }
   mensaje.value = null
   mensajeTipo.value = null
   mostrarFormularioCategoria.value = true
@@ -271,7 +265,7 @@ const abrirFormularioCategoria = () => {
 const abrirAccion = (titulo: string) => {
   mostrarFormularioMovimiento.value = false
   mostrarFormularioCategoria.value = false
-  if (titulo === 'Movimientos financieros') {
+  if (titulo === 'Entradas y salidas') {
     abrirFormularioMovimiento()
   } else if (titulo === 'Categorias contables') {
     abrirFormularioCategoria()
@@ -301,7 +295,7 @@ const registrarCategoria = async () => {
   }
   try {
     formularioCategoria.value.codigo = codigoNormalizado
-    const respuesta = await fetch('http://3.15.163.214/ApiPOS/contabilidad/categorias/', {
+    const respuesta = await fetch(ENDPOINTS.CONTABILIDAD_CATEGORIAS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(formularioCategoria.value)
@@ -336,26 +330,12 @@ const cerrarFormularioCategoria = () => {
 }
 
 onMounted(() => {
-  cargarCategoriasContables()
   cargarProveedores()
 })
 </script>
 
 <template>
   <main class="contabilidad">
-    <header class="contabilidad__cabecera">
-      <div>
-        <p class="contabilidad__prefijo">Contabilidad</p>
-        <h1>Panel contable</h1>
-        <p class="contabilidad__nota">Revisa ingresos, egresos y cartera desde un solo lugar.</p>
-      </div>
-      <div class="contabilidad__acciones">
-        <SessionRoleChip />
-        <button type="button" class="boton secundario">Exportar</button>
-        <button type="button" class="boton">Nuevo registro</button>
-      </div>
-    </header>
-
     <section class="contabilidad__resumen">
       <article v-for="item in resumen" :key="item.titulo" class="tarjeta">
         <div>
@@ -394,7 +374,7 @@ onMounted(() => {
     >
       <section class="contabilidad__formulario" @click.stop>
         <div class="modal__encabezado">
-          <h2>Movimiento financiero</h2>
+          <h2>Entradas y salidas</h2>
           <button type="button" class="modal__cerrar" @click="cerrarFormularioMovimiento">x</button>
         </div>
         <form class="form" @submit.prevent="registrarMovimiento">
@@ -411,24 +391,18 @@ onMounted(() => {
           </label>
           <label>
             <span>Monto</span>
-            <input v-model.number="formularioMovimiento.monto" type="number" min="0" step="0.01" required />
+            <input
+              :value="montoMovimientoInput"
+              type="text"
+              inputmode="numeric"
+              placeholder="0"
+              @input="actualizarMontoMovimiento"
+              required
+            />
           </label>
           <label>
-            <span>Concepto</span>
-            <select
-              v-model.number="formularioMovimiento.categoria_contabilidad_id"
-              :disabled="cargandoCategorias || categoriasContables.length === 0"
-              required
-            >
-              <option :value="0" disabled>Selecciona una categoria</option>
-              <option v-for="categoria in categoriasContables" :key="categoria.id" :value="categoria.id">
-                {{ categoria.nombre }}
-              </option>
-            </select>
-            <small v-if="cargandoCategorias" class="ayuda">Cargando categorias...</small>
-            <small v-else-if="categoriasContables.length === 0" class="ayuda ayuda--error">
-              {{ errorCategorias ?? 'No hay categorias disponibles.' }}
-            </small>
+            <span>Nota</span>
+            <input v-model="formularioMovimiento.nota" type="text" placeholder="Nota" />
           </label>
           <label>
             <span>Proveedor</span>
@@ -448,7 +422,7 @@ onMounted(() => {
             </small>
           </label>
           <button type="submit" class="boton" :disabled="guardandoMovimiento">
-            {{ guardandoMovimiento ? 'Guardando...' : 'Guardar movimiento' }}
+            {{ guardandoMovimiento ? 'Guardando...' : 'Guardar' }}
           </button>
           <p v-if="errorMovimiento" class="form__error">{{ errorMovimiento }}</p>
           <p v-if="mensaje" :class="['form__mensaje', `form__mensaje--${mensajeTipo}`]">{{ mensaje }}</p>
@@ -458,7 +432,7 @@ onMounted(() => {
     </div>
 
     <div
-      v-if="mostrarFormularioCategoria"
+      v-if="categoriasHabilitadas && mostrarFormularioCategoria"
       class="modal"
       role="dialog"
       aria-modal="true"

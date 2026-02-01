@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
+import { ENDPOINTS } from '../config/endpoints'
 
 type Producto = {
   id: number
@@ -46,8 +47,8 @@ const productos = reactive<Producto[]>([
   }
 ])
 
-const API_PRODUCTOS = 'http://127.0.0.1:8000/productos/'
-const API_CATEGORIAS = 'http://3.15.163.214/ApiPOS/categorias/'
+const API_PRODUCTOS = ENDPOINTS.PRODUCTOS
+const API_CATEGORIAS = ENDPOINTS.CATEGORIAS_POS
 
 const form = reactive({
   codigoBarras: '',

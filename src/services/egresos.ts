@@ -1,8 +1,8 @@
 import type { Registro, RegistroPayload } from './tipos'
+import { ENDPOINTS } from '../config/endpoints'
 
-const EGRESOS_ENDPOINT =
-  'http://3.15.163.214/ApiPOS/contabilidad/egresos/?desde=2026-01-20&hasta=2026-01-23'
-const EGRESOS_CREATE_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/egresos/'
+const EGRESOS_ENDPOINT = ENDPOINTS.CONTABILIDAD_EGRESOS_LIST
+const EGRESOS_CREATE_ENDPOINT = ENDPOINTS.CONTABILIDAD_EGRESOS_CREATE
 
 const request = async <T>(options?: RequestInit, url: string = EGRESOS_ENDPOINT): Promise<T> => {
   const respuesta = await fetch(url, options)

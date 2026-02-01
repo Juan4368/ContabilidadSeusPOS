@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import POSView from './views/POSView.vue'
 import StockView from './views/StockView.vue'
@@ -9,6 +9,9 @@ import VentasPendientesView from './views/VentasPendientesView.vue'
 import ContabilidadView from './views/ContabilidadView.vue'
 import CarteraView from './views/CarteraView.vue'
 import LoginView from './views/LoginView.vue'
+import ResumenVentasView from './views/ResumenVentasView.vue'
+import PrestamoCajasView from './views/PrestamoCajasView.vue'
+import { ENDPOINTS } from './config/endpoints'
 
 type VistaId =
   | 'pos'
@@ -18,6 +21,8 @@ type VistaId =
   | 'admin'
   | 'productos'
   | 'ventas-pendientes'
+  | 'resumen-ventas'
+  | 'prestamo-cajas'
 
 const vistaActiva = ref<VistaId>('pos')
 const sesionIniciada = ref(false)
@@ -25,7 +30,7 @@ const sesionUsuario = ref<string | null>(null)
 const sesionRoles = ref<string[]>([])
 const loginError = ref('')
 const loginCargando = ref(false)
-const LOGIN_ENDPOINT = 'http://127.0.0.1:8001/auth/login'
+const LOGIN_ENDPOINT = ENDPOINTS.LOGIN
 
 const parseJwt = (token: string): Record<string, unknown> | null => {
   try {
@@ -46,10 +51,28 @@ const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componen
   { id: 'stock', nombre: 'Stock', descripcion: 'Inventario y reposicion', componente: StockView },
   { id: 'admin', nombre: 'Admin', descripcion: 'Usuarios y categorias', componente: AdminView },
   { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView },
-  { id: 'ventas-pendientes', nombre: 'Ventas pendientes', descripcion: 'Recuperar ventas', componente: VentasPendientesView }
+  { id: 'ventas-pendientes', nombre: 'Ventas pendientes', descripcion: 'Recuperar ventas', componente: VentasPendientesView },
+  { id: 'resumen-ventas', nombre: 'Resumen ventas', descripcion: 'Resumen diario de ventas', componente: ResumenVentasView },
+  { id: 'prestamo-cajas', nombre: 'Prestamo cajas', descripcion: 'Control de cajas prestadas', componente: PrestamoCajasView }
 ]
 
-const componenteActual = computed(() => vistas.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView)
+const esCajero = computed(() => sesionRoles.value.map((rol) => rol.toLowerCase()).includes('cajero'))
+
+const vistasDisponibles = computed(() => {
+  if (!esCajero.value) return vistas
+  const permitidas: VistaId[] = ['pos', 'contabilidad', 'cartera', 'admin', 'prestamo-cajas']
+  return vistas.filter((vista) => permitidas.includes(vista.id))
+})
+
+const componenteActual = computed(
+  () => vistasDisponibles.value.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView
+)
+
+watch(vistasDisponibles, (nuevas) => {
+  if (!nuevas.find((vista) => vista.id === vistaActiva.value)) {
+    vistaActiva.value = nuevas[0]?.id ?? 'pos'
+  }
+})
 
 const cambiarVista = (event: Event) => {
   const detalle = (event as CustomEvent<{ vista: VistaId }>).detail
@@ -70,16 +93,41 @@ const iniciarSesion = async (credenciales: { usuario: string; contrasena: string
   loginError.value = ''
   loginCargando.value = true
   try {
+    const payloadLogin = { username: credenciales.usuario, password: credenciales.contrasena }
+    console.log('login:request', { endpoint: LOGIN_ENDPOINT, payload: payloadLogin })
+    const logLogin = async (lines: string[]) => {
+      try {
+        const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p: unknown) => Promise<void> } })
+          .ipcRenderer
+        if (!ipc?.invoke) return
+        await ipc.invoke('log:append', { filename: 'login.txt', lines })
+      } catch (err) {
+        console.warn('No se pudo escribir login.txt', err)
+      }
+    }
+    const timestamp = new Date().toISOString()
     const respuesta = await fetch(LOGIN_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: credenciales.usuario, password: credenciales.contrasena })
+      body: JSON.stringify(payloadLogin)
     })
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
+      console.log('login:response', { status: respuesta.status, ok: false, body: detalle })
+      await logLogin([
+        `[${timestamp}] request endpoint=${LOGIN_ENDPOINT}`,
+        `payload=${JSON.stringify(payloadLogin)}`,
+        `response status=${respuesta.status} ok=false body=${detalle}`
+      ])
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = (await respuesta.json().catch(() => ({}))) as Record<string, unknown>
+    console.log('login:response', { status: respuesta.status, ok: true, body: data })
+    await logLogin([
+      `[${timestamp}] request endpoint=${LOGIN_ENDPOINT}`,
+      `payload=${JSON.stringify(payloadLogin)}`,
+      `response status=${respuesta.status} ok=true body=${JSON.stringify(data)}`
+    ])
     const token = String(data.access_token ?? data.token ?? data.access ?? '')
     const payload = token ? parseJwt(token) : null
     const roles = Array.isArray(payload?.roles) ? (payload?.roles as string[]) : []
@@ -92,8 +140,8 @@ const iniciarSesion = async (credenciales: { usuario: string; contrasena: string
     )
     window.dispatchEvent(new Event('pos:sesion-actualizada'))
   } catch (error) {
-    const mensaje = error instanceof Error ? error.message : 'No fue posible iniciar sesión.'
-    loginError.value = mensaje
+    const mensaje = error instanceof Error ? error.message : String(error)
+    loginError.value = mensaje || 'No fue posible iniciar sesi?n.'
   } finally {
     loginCargando.value = false
   }
@@ -139,7 +187,7 @@ hidratarSesion()
         <p class="selector__titulo">Vistas disponibles</p>
         <div class="selector__botones">
           <button
-            v-for="vista in vistas"
+            v-for="vista in vistasDisponibles"
             :key="vista.id"
             type="button"
             :class="['selector__boton', { activa: vista.id === vistaActiva }]"
@@ -261,4 +309,3 @@ hidratarSesion()
 @media (max-width: 768px) {
 }
 </style>
-

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, onMounted, ref } from 'vue'
+import { ENDPOINTS } from '../config/endpoints'
+import { getSessionUserId } from '../utils/session'
 
 type VentaDetalle = {
   venta_detalle_id: number
@@ -26,7 +28,7 @@ type CuentaPorCobrar = {
   venta_detalles: VentaDetalle[]
 }
 
-const CUENTAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/cuentas-por-cobrar/'
+const CUENTAS_ENDPOINT = ENDPOINTS.CONTABILIDAD_CUENTAS
 
 const cuentas = ref<CuentaPorCobrar[]>([])
 const cargando = ref(false)
@@ -41,6 +43,20 @@ const formularioAbono = ref({
   monto: 0,
   concepto: 'Abono parcial'
 })
+
+const formatCurrencyInput = (valor: number) =>
+  Math.max(Number(valor || 0), 0).toLocaleString('es-CO', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  })
+
+const montoAbonoInput = computed(() => formatCurrencyInput(formularioAbono.value.monto))
+
+const actualizarMontoAbono = (event: Event) => {
+  const value = (event.target as HTMLInputElement).value
+  const limpio = value.replace(/\D+/g, '')
+  formularioAbono.value.monto = Number(limpio || 0)
+}
 
 const totalCuentas = computed(() => cuentas.value.length)
 const totalSaldo = computed(() =>
@@ -129,7 +145,7 @@ const registrarAbono = async () => {
     monto: formularioAbono.value.monto,
     concepto: formularioAbono.value.concepto.trim(),
     caja_id: 1,
-    usuario_id: 8,
+    usuario_id: getSessionUserId() ?? 8,
     venta_id: cuentaAbono.value.venta_id
   }
   try {
@@ -286,11 +302,21 @@ onMounted(() => {
           </label>
           <label>
             <span>Monto</span>
-            <input v-model.number="formularioAbono.monto" type="number" min="0" step="0.01" required />
+            <input
+              :value="montoAbonoInput"
+              type="text"
+              inputmode="numeric"
+              placeholder="0"
+              @input="actualizarMontoAbono"
+              required
+            />
           </label>
           <label>
             <span>Concepto</span>
-            <input v-model="formularioAbono.concepto" type="text" required />
+            <select v-model="formularioAbono.concepto" required>
+              <option value="Abono parcial">Abono parcial</option>
+              <option value="Abono total">Abono total</option>
+            </select>
           </label>
           <button type="submit" class="boton" :disabled="guardandoAbono">
             {{ guardandoAbono ? 'Guardando...' : 'Guardar abono' }}
@@ -507,6 +533,14 @@ onMounted(() => {
 }
 
 .form input {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.55rem 0.75rem;
+  background: rgba(12, 13, 16, 0.92);
+  color: #e2e8f0;
+}
+
+.form select {
   border-radius: 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
   padding: 0.55rem 0.75rem;

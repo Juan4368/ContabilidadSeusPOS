@@ -1,8 +1,10 @@
+import { ENDPOINTS } from '../config/endpoints'
+
 export type MovimientoFinancieroPayload = {
   fecha: string
   tipo: 'INGRESO' | 'EGRESO'
   monto: number
-  concepto: string
+  nota?: string
   categoria_contabilidad_id?: number
   proveedor_id: number
   caja_id: number
@@ -10,7 +12,7 @@ export type MovimientoFinancieroPayload = {
   venta_id: number | null
 }
 
-const MOVIMIENTOS_FINANCIEROS_ENDPOINT = 'http://127.0.0.1:8000/contabilidad/movimientos-financieros/'
+const MOVIMIENTOS_FINANCIEROS_ENDPOINT = ENDPOINTS.CONTABILIDAD_MOVIMIENTOS
 
 const request = async <T>(options?: RequestInit): Promise<T> => {
   const respuesta = await fetch(MOVIMIENTOS_FINANCIEROS_ENDPOINT, options)

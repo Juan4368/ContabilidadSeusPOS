@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
+import { ENDPOINTS } from '../config/endpoints'
 
 type Usuario = {
   user_id: number
@@ -45,13 +46,12 @@ type Proveedor = {
   email: string
 }
 
-const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
-
-const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
-const USUARIOS_REGISTRO_ENDPOINT = 'http://127.0.0.1:8001/auth/register'
-const CATEGORIAS_ENDPOINT = 'http://127.0.0.1:8000/categorias/'
-const CATEGORIAS_CONTABILIDAD_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/categorias/'
-const PROVEEDORES_ENDPOINT = 'http://3.15.163.214/ApiPOS/proveedores/'
+const CLIENTES_ENDPOINT = ENDPOINTS.CLIENTES
+const USUARIOS_ENDPOINT = ENDPOINTS.USUARIOS
+const USUARIOS_REGISTRO_ENDPOINT = ENDPOINTS.USUARIOS_REGISTRO
+const CATEGORIAS_ENDPOINT = ENDPOINTS.CATEGORIAS
+const CATEGORIAS_CONTABILIDAD_ENDPOINT = ENDPOINTS.CONTABILIDAD_CATEGORIAS
+const PROVEEDORES_ENDPOINT = ENDPOINTS.CONTABILIDAD_PROVEEDORES
 
 const usuarios = reactive<Usuario[]>([])
 
@@ -126,7 +126,7 @@ const cargarUsuarios = async () => {
     }
     const data = await respuesta.json()
     const dataObj = data as Record<string, unknown>
-    const lista =
+    const lista = (
       Array.isArray(data)
         ? data
         : Array.isArray(dataObj.results)
@@ -140,6 +140,7 @@ const cargarUsuarios = async () => {
                 : dataObj && typeof dataObj === 'object' && 'user_id' in dataObj
                   ? [dataObj]
                   : []
+    ) as unknown[]
     const normalizados = lista
       .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
+import { ENDPOINTS } from '../config/endpoints'
 
 type PendingItem = {
   id: number
@@ -11,8 +12,8 @@ type PendingItem = {
   items: number
 }
 
-const VENTAS_ENDPOINT = 'http://127.0.0.1:8000/ventas/'
-const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
+const VENTAS_ENDPOINT = ENDPOINTS.VENTAS_LOCAL
+const CLIENTES_ENDPOINT = ENDPOINTS.CLIENTES
 const pendientes = ref<PendingItem[]>([])
 const clientesMap = new Map<string, string>()
 

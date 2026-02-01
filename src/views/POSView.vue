@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import jsPDF from 'jspdf'
-import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { crearMovimientoFinanciero } from '../services/movimientosFinancieros'
+import { ENDPOINTS } from '../config/endpoints'
+import { getSessionUserId } from '../utils/session'
 
 type Producto = {
   id: number
@@ -36,38 +37,12 @@ type Cliente = {
   descuentoPorcentaje?: number
 }
 
-const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
-const VENTAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/ventas/'
+const CLIENTES_ENDPOINT = ENDPOINTS.CLIENTES
+const VENTAS_ENDPOINT = ENDPOINTS.VENTAS_POS
 const DEFAULT_PROVEEDOR_ID = 0
 const DEFAULT_CAJA_ID = 1
 const DEFAULT_USUARIO_ID = 23
 
-const parseJwt = (token: string): Record<string, unknown> | null => {
-  try {
-    const payload = token.split('.')[1]
-    if (!payload) return null
-    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
-    const decoded = atob(normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '='))
-    return JSON.parse(decoded) as Record<string, unknown>
-  } catch {
-    return null
-  }
-}
-
-const obtenerUsuarioIdSesion = () => {
-  try {
-    const raw = localStorage.getItem('pos_sesion')
-    if (!raw) return null
-    const data = JSON.parse(raw) as { token?: string }
-    const token = data?.token ? String(data.token) : ''
-    const payload = token ? parseJwt(token) : null
-    const idRaw = payload?.user_id ?? payload?.usuario_id ?? payload?.id ?? payload?.sub
-    const id = Number(idRaw)
-    return Number.isFinite(id) && id > 0 ? id : null
-  } catch {
-    return null
-  }
-}
 
 const productos = ref<Producto[]>([
   { id: 1, nombre: 'Café americano', precio: 2.5, stock: 18, categoria: 'Bebidas', destacador: 'Caliente' },
@@ -101,7 +76,18 @@ const ventaPendienteId = ref<number | null>(null)
 const payloadVenta = ref<Record<string, unknown> | null>(null)
 const respuestaVenta = ref<unknown>(null)
 const payloadMovimiento = ref<string | null>(null)
+const mostrarPayloadVenta = ref(false)
 const mostrarTicketModal = ref(false)
+const mostrarResumenCobro = ref(false)
+const resumenCobro = ref({
+  subtotal: 0,
+  descuento: 0,
+  total: 0,
+  pagoRecibido: 0,
+  cambio: 0
+})
+const numeroFacturaResumen = ref('')
+const reciboItems = ref<ItemCarrito[]>([])
 const descuentoItem = ref<ItemCarrito | null>(null)
 const tamañoPanelProductos = ref(62)
 const tamañoPanelDetalle = computed(() => Math.max(100 - tamañoPanelProductos.value, 20))
@@ -178,6 +164,7 @@ const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
   const ventaIdRaw = Number(venta.venta_id ?? venta.id ?? NaN)
   ventaId.value = Number.isFinite(ventaIdRaw) ? ventaIdRaw : Date.now()
   ventaPendienteId.value = Number.isFinite(ventaIdRaw) ? ventaIdRaw : null
+  numeroFacturaResumen.value = String(venta.numero_factura ?? venta.numeroFactura ?? '')
   const clienteRaw = venta.cliente_id ?? venta.clienteId ?? null
   clienteId.value = clienteRaw ? String(clienteRaw) : null
   notaRapida.value = String(venta.nota_venta ?? venta.nota ?? '')
@@ -312,23 +299,25 @@ const cargarProductos = async () => {
   }
 
   try {
-    const respuesta = await fetch('http://127.0.0.1:8000/productos/')
+    const respuesta = await fetch(ENDPOINTS.PRODUCTOS)
     if (!respuesta.ok) {
       throw new Error(`Error ${respuesta.status}`)
     }
-    const data = await respuesta.json()
-    const lista =
+    const data = (await respuesta.json()) as Record<string, unknown> | unknown[]
+    const dataObj = data as Record<string, unknown>
+    const lista = (
       Array.isArray(data)
         ? data
-        : Array.isArray(data.results)
-          ? data.results
-          : Array.isArray(data.data)
-            ? data.data
-            : Array.isArray((data as Record<string, unknown>)?.data?.results)
-              ? (data as Record<string, unknown>).data.results
-              : Array.isArray((data as Record<string, unknown>)?.items)
-                ? (data as Record<string, unknown>).items
+        : Array.isArray(dataObj.results)
+          ? dataObj.results
+          : Array.isArray(dataObj.data)
+            ? dataObj.data
+            : Array.isArray((dataObj.data as Record<string, unknown>)?.results)
+              ? (dataObj.data as Record<string, unknown>).results
+              : Array.isArray(dataObj.items)
+                ? dataObj.items
                 : []
+    ) as unknown[]
     const normalizados = lista
       .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
@@ -374,11 +363,26 @@ const cargarProductos = async () => {
 
 const cargarClientes = async () => {
   try {
+    const logClientes = async (lines: string[]) => {
+      try {
+        const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p: unknown) => Promise<void> } })
+          .ipcRenderer
+        if (!ipc?.invoke) return
+        await ipc.invoke('log:append', { filename: 'clientes.txt', lines })
+      } catch (err) {
+        console.warn('No se pudo escribir clientes.txt', err)
+      }
+    }
+    const timestamp = new Date().toISOString()
+    await logClientes([`[${timestamp}] request endpoint=${CLIENTES_ENDPOINT}`])
     const respuesta = await fetch(CLIENTES_ENDPOINT)
     if (!respuesta.ok) {
-      throw new Error(`Error ${respuesta.status}`)
+      const detalle = await respuesta.text().catch(() => '')
+      await logClientes([`response status=${respuesta.status} ok=false body=${detalle}`])
+      throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = await respuesta.json()
+    await logClientes([`response status=${respuesta.status} ok=true body=${JSON.stringify(data)}`])
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizados = lista
       .map((item: unknown, index: number) => {
@@ -434,7 +438,8 @@ const calcularLinea = (item: ItemCarrito) => {
   const base = Number(item.precio) * Number(item.cantidad)
   const descuentoPct = normalizarDescuento(item.descuentoPct)
   const descuentoPorcentaje = base * (descuentoPct / 100)
-  const descuentoMonto = normalizarDescuentoMonto(item.descuentoMonto, base - descuentoPorcentaje)
+  const descuentoMontoTotal = Number(item.descuentoMonto) * Number(item.cantidad)
+  const descuentoMonto = normalizarDescuentoMonto(descuentoMontoTotal, base - descuentoPorcentaje)
   const total = Math.max(base - descuentoPorcentaje - descuentoMonto, 0)
   return { base, descuentoPct, descuentoPorcentaje, descuentoMonto, total }
 }
@@ -579,11 +584,15 @@ const construirPayloadVenta = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
   const tipoPagoPayload = tipoPago.value === 'credito' ? null : tipoPago.value
   const clientePayload = clienteId.value ?? 'e7098aa3-ea98-4a42-a019-2bf75a16a1ea'
+  const usuarioPayload = getSessionUserId()
+  if (!usuarioPayload) {
+    throw new Error('No se pudo identificar el usuario de la sesión.')
+  }
   return {
     tipo_pago: tipoPagoPayload,
     estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
-    user_id: 8,
+    user_id: usuarioPayload,
     cliente_id: clientePayload,
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
@@ -600,12 +609,17 @@ const construirPayloadVenta = (estadoOverride?: boolean) => {
 const construirPayloadActualizacion = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
   const clientePayload = clienteId.value ?? 'e7098aa3-ea98-4a42-a019-2bf75a16a1ea'
+  const usuarioPayload = getSessionUserId()
+  if (!usuarioPayload) {
+    throw new Error('No se pudo identificar el usuario de la sesión.')
+  }
   return {
     estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
     cliente_id: clientePayload,
+    user_id: usuarioPayload,
     detalles: carrito.value.map((item) => ({
       producto_id: item.backendId ?? item.id,
       cantidad: item.cantidad,
@@ -617,6 +631,7 @@ const construirPayloadActualizacion = (estadoOverride?: boolean) => {
 const guardarVentaApi = async (estadoOverride?: boolean) => {
   const payload = construirPayloadVenta(estadoOverride)
   payloadVenta.value = payload
+  mostrarPayloadVenta.value = true
 
   const respuesta = await fetch(VENTAS_ENDPOINT, {
     method: 'POST',
@@ -635,14 +650,17 @@ const guardarVentaApi = async (estadoOverride?: boolean) => {
 
 const registrarMovimientoIngreso = async (ventaId?: number | null) => {
   const montoVenta = Number(resumenCarrito.value.total ?? 0)
+  const usuarioPayload = getSessionUserId()
+  if (!usuarioPayload) {
+    throw new Error('No se pudo identificar el usuario de la sesión.')
+  }
   const payload = {
     fecha: new Date().toISOString(),
-    tipo: 'INGRESO',
+    tipo: 'INGRESO' as const,
     monto: montoVenta,
-    concepto: 'venta',
     proveedor_id: DEFAULT_PROVEEDOR_ID,
     caja_id: DEFAULT_CAJA_ID,
-    usuario_id: obtenerUsuarioIdSesion() ?? DEFAULT_USUARIO_ID,
+    usuario_id: usuarioPayload,
     venta_id: ventaId && ventaId > 0 ? ventaId : null
   }
   payloadMovimiento.value = JSON.stringify(payload, null, 2)
@@ -652,6 +670,7 @@ const registrarMovimientoIngreso = async (ventaId?: number | null) => {
 const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
   const payload = construirPayloadActualizacion(estadoOverride)
   payloadVenta.value = payload
+  mostrarPayloadVenta.value = true
 
   const respuesta = await fetch(`${VENTAS_ENDPOINT}${id}`, {
     method: 'PUT',
@@ -674,6 +693,14 @@ const cerrarVenta = async () => {
     return
   }
   try {
+    const snapshot = {
+      subtotal: resumenCarrito.value.subtotalBruto,
+      descuento: resumenCarrito.value.descuentoLineas,
+      total: resumenCarrito.value.total,
+      pagoRecibido: Number(pagoRecibido.value || 0),
+      cambio: resumenCarrito.value.cambio
+    }
+    const snapshotItems = carrito.value.map((item) => ({ ...item }))
     let respuestaVenta: Record<string, unknown> | null = null
     if (ventaPendienteId.value) {
       respuestaVenta = (await actualizarVentaApi(ventaPendienteId.value, true)) as Record<string, unknown>
@@ -681,6 +708,9 @@ const cerrarVenta = async () => {
     } else {
       respuestaVenta = (await guardarVentaApi(true)) as Record<string, unknown>
     }
+    numeroFacturaResumen.value = String(
+      respuestaVenta?.numero_factura ?? respuestaVenta?.numeroFactura ?? ''
+    )
     const idRaw = respuestaVenta?.venta_id ?? respuestaVenta?.id ?? ventaPendienteId.value
     const ventaIdFinal = idRaw !== null && idRaw !== undefined ? Number(idRaw) : NaN
     try {
@@ -697,6 +727,9 @@ const cerrarVenta = async () => {
     fechaVenta.value = new Date().toISOString()
     estadoVenta.value = true
     ultimaAccion.value = 'Venta registrada'
+    resumenCobro.value = snapshot
+    reciboItems.value = snapshotItems
+    mostrarResumenCobro.value = true
   } catch (error) {
     const mensaje = error instanceof Error ? error.message : 'Error al guardar la venta'
     console.error('No se pudo guardar la venta', error)
@@ -738,7 +771,7 @@ const imprimirTicket = () => {
   window.print()
 }
 
-const guardarTicket = () => {
+const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.value, numeroFactura?: string) => {
   const fecha = new Date()
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const margin = 40
@@ -750,22 +783,33 @@ const guardarTicket = () => {
   let y = margin
 
   doc.setFont('courier', 'normal')
-  doc.setFontSize(14)
-  doc.text('Ticket', margin, y)
+  doc.setFontSize(16)
+  doc.text('AUTOSERVICIO EL PAISA', pageWidth / 2, y, { align: 'center' })
+  y += lineHeight
+  doc.setFontSize(12)
+  doc.text('FACTURA DE VENTA', pageWidth / 2, y, { align: 'center' })
   y += lineHeight
   doc.setFontSize(10)
+  const numero = numeroFactura?.trim() ? numeroFactura.trim() : `POS-${ventaId.value}`
+  doc.text(`Factura: ${numero}`, margin, y)
+  y += lineHeight
   doc.text(`Fecha: ${fecha.toLocaleString('es-CO')}`, margin, y)
+  y += lineHeight
+  const clienteNombre = clienteSeleccionado.value?.nombre ?? 'Consumidor final'
+  doc.text(`Cliente: ${clienteNombre}`, margin, y)
+  y += lineHeight
+  doc.text(`Caja: ${DEFAULT_CAJA_ID}`, margin, y)
   y += lineHeight
   doc.text(`Nota: ${notaRapida.value}`, margin, y)
   y += lineHeight
   doc.line(margin, y, right, y)
   y += lineHeight
 
-  if (carrito.value.length === 0) {
+  if (items.length === 0) {
     doc.text('Sin productos', margin, y)
     y += lineHeight
   } else {
-    carrito.value.forEach((item) => {
+    items.forEach((item) => {
       const nombreLineas = doc.splitTextToSize(item.nombre, nombreWidth)
       if (y + lineHeight > pageHeight - margin) {
         doc.addPage()
@@ -793,23 +837,46 @@ const guardarTicket = () => {
   doc.line(margin, y, right, y)
   y += lineHeight
   doc.text('Subtotal', margin, y)
-  doc.text(formatCurrency(resumenCarrito.value.subtotalBruto), right, y, { align: 'right' })
+  doc.text(formatCurrency(resumen.subtotal), right, y, { align: 'right' })
   y += lineHeight
   doc.text('Desc. productos', margin, y)
-  doc.text(`-${formatCurrency(resumenCarrito.value.descuentoLineas)}`, right, y, { align: 'right' })
+  doc.text(`-${formatCurrency(resumen.descuento)}`, right, y, { align: 'right' })
   y += lineHeight
   doc.text('Desc. global', margin, y)
-  doc.text(`-${formatCurrency(resumenCarrito.value.descuentoGlobal)}`, right, y, { align: 'right' })
+  doc.text(`-${formatCurrency(0)}`, right, y, { align: 'right' })
   y += lineHeight
   doc.text('Impuesto', margin, y)
-  doc.text(formatCurrency(resumenCarrito.value.impuesto), right, y, { align: 'right' })
+  doc.text(formatCurrency(0), right, y, { align: 'right' })
   y += lineHeight
   doc.setFontSize(12)
   doc.text('Total', margin, y)
-  doc.text(formatCurrency(resumenCarrito.value.total), right, y, { align: 'right' })
+  doc.text(formatCurrency(resumen.total), right, y, { align: 'right' })
+  return doc
+}
 
-  const sello = fecha.toISOString().slice(0, 19).replace(/[:T]/g, '-')
+const guardarTicket = () => {
+  const doc = generarDocTicket(carrito.value, {
+    subtotal: resumenCarrito.value.subtotalBruto,
+    descuento: resumenCarrito.value.descuentoLineas,
+    total: resumenCarrito.value.total,
+    pagoRecibido: Number(pagoRecibido.value || 0),
+    cambio: resumenCarrito.value.cambio
+  })
+
+  const sello = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
   doc.save(`ticket-${sello}.pdf`)
+}
+
+const guardarTicketResumen = () => {
+  const doc = generarDocTicket(reciboItems.value, resumenCobro.value, numeroFacturaResumen.value)
+  const sello = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+  doc.save(`ticket-${sello}.pdf`)
+}
+
+const imprimirTicketResumen = () => {
+  const doc = generarDocTicket(reciboItems.value, resumenCobro.value, numeroFacturaResumen.value)
+  doc.autoPrint()
+  doc.output('dataurlnewwindow')
 }
 </script>
 
@@ -821,8 +888,6 @@ const guardarTicket = () => {
       </div>
       <div class="cabecera__chips">
         <span class="chip">Caja 01</span>
-        <span class="chip chip--exito">Listo para cobrar</span>
-        <SessionRoleChip />
         <span class="chip" :class="isOnline ? 'chip--online' : 'chip--offline'">
           {{ isOnline ? 'En línea' : 'Offline' }}
         </span>
@@ -848,7 +913,14 @@ const guardarTicket = () => {
             <input v-model="consulta" type="search" placeholder="Busque por nombre o codigo de barras..." />
             <ul v-if="sugerencias.length" class="sugerencias" role="listbox">
               <li v-for="producto in sugerencias" :key="producto.id">
-                <button type="button" class="sugerencia" @click="agregarAlCarrito(producto)">
+                <button
+                  type="button"
+                  class="sugerencia"
+                  @click="
+                    agregarAlCarrito(producto);
+                    consulta = ''
+                  "
+                >
                   <span class="sugerencia__nombre">{{ producto.nombre }}</span>
                   <span class="sugerencia__precio">{{ formatCurrency(producto.precio) }}</span>
                 </button>
@@ -874,6 +946,10 @@ const guardarTicket = () => {
             <button type="button" class="boton secundaria" @click="limpiarCarrito">Vaciar</button>
             <button type="button" class="boton secundaria" @click="mostrarTicketModal = true">Vista previa F9</button>
             <button type="button" class="boton" @click="cobrarRapido">Pago exacto</button>
+          </div>
+          <div class="botonera">
+            <button type="button" class="boton secundaria" @click="guardarTicket">Guardar PDF</button>
+            <button type="button" class="boton" @click="imprimirTicket">Imprimir recibo</button>
           </div>
         </header>
 
@@ -1013,6 +1089,9 @@ const guardarTicket = () => {
             <button type="button" class="boton primario" @click="cerrarVenta">Cobrar F10</button>
           </div>
         </div>
+        <pre v-if="mostrarPayloadVenta && payloadVenta" class="payload">
+{{ JSON.stringify(payloadVenta, null, 2) }}
+        </pre>
       </section>
     </section>
 
@@ -1090,6 +1169,48 @@ const guardarTicket = () => {
         </div>
         <div class="modal__acciones">
           <button type="button" class="boton secundaria" @click="cerrarModalDescuento">Listo</button>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="mostrarResumenCobro"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="mostrarResumenCobro = false"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Resumen de cobro</h2>
+          <button type="button" class="modal__cerrar" @click="mostrarResumenCobro = false">x</button>
+        </div>
+        <dl class="totales">
+          <div>
+            <dt>Subtotal</dt>
+            <dd>{{ formatCurrency(resumenCobro.subtotal) }}</dd>
+          </div>
+          <div>
+            <dt>Descuento</dt>
+            <dd>-{{ formatCurrency(resumenCobro.descuento) }}</dd>
+          </div>
+          <div class="total">
+            <dt>Total</dt>
+            <dd>{{ formatCurrency(resumenCobro.total) }}</dd>
+          </div>
+          <div>
+            <dt>Pago recibido</dt>
+            <dd>{{ formatCurrency(resumenCobro.pagoRecibido) }}</dd>
+          </div>
+          <div class="cambio">
+            <dt>Cambio</dt>
+            <dd>{{ formatCurrency(resumenCobro.cambio) }}</dd>
+          </div>
+        </dl>
+        <div class="modal__acciones">
+          <button type="button" class="boton" @click="imprimirTicketResumen">Imprimir recibo</button>
+          <button type="button" class="boton secundaria" @click="guardarTicketResumen">Guardar PDF</button>
+          <button type="button" class="boton secundaria" @click="mostrarResumenCobro = false">Cerrar</button>
         </div>
       </section>
     </div>

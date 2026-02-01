@@ -1,6 +1,7 @@
 import type { Registro, RegistroPayload } from './tipos'
+import { ENDPOINTS } from '../config/endpoints'
 
-const INGRESOS_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/ingresos/'
+const INGRESOS_ENDPOINT = ENDPOINTS.CONTABILIDAD_INGRESOS
 
 const request = async <T>(options?: RequestInit, url: string = INGRESOS_ENDPOINT): Promise<T> => {
   const respuesta = await fetch(url, options)
