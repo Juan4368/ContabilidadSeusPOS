@@ -2,10 +2,7 @@
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { onMounted, ref, watch } from 'vue'
 
-import { crearIngreso } from '../services/ingresos'
-import { crearEgreso } from '../services/egresos'
 import { crearMovimientoFinanciero, type MovimientoFinancieroPayload } from '../services/movimientosFinancieros'
-import type { RegistroPayload } from '../services/tipos'
 
 const resumen = [
   { titulo: 'Ingresos', valor: '$ 0', detalle: 'Mes actual', estado: 'estable' },
@@ -14,15 +11,11 @@ const resumen = [
 ]
 
 const acciones = [
-  { titulo: 'Registrar ingreso', descripcion: 'Nueva entrada de dinero.' },
-  { titulo: 'Registrar egreso', descripcion: 'Salida de dinero o pago.' },
   { titulo: 'Movimientos financieros', descripcion: 'Ajustes y salidas especiales.' },
   { titulo: 'Categorias contables', descripcion: 'Gestiona tus categorias.' },
   { titulo: 'Reportes', descripcion: 'Resumenes y cortes.' }
 ]
 
-const mostrarFormularioIngreso = ref(false)
-const mostrarFormularioEgreso = ref(false)
 const mostrarFormularioMovimiento = ref(false)
 const mostrarFormularioCategoria = ref(false)
 
@@ -41,8 +34,6 @@ type Proveedor = {
 }
 
 const categoriasContables = ref<CategoriaContable[]>([])
-const categoriasIngreso = ref<CategoriaContable[]>([])
-const categoriasEgreso = ref<CategoriaContable[]>([])
 const cargandoCategorias = ref(false)
 const errorCategorias = ref<string | null>(null)
 
@@ -58,27 +49,6 @@ const toDateTimeLocal = (fecha: Date) => {
   )}:${pad(fecha.getMinutes())}`
 }
 
-const ultimoTipoIngreso = ref('EFECTIVO')
-const ultimoTipoEgreso = ref('EFECTIVO')
-
-const formularioIngreso = ref<RegistroPayload>({
-  fecha: toDateTimeLocal(new Date()),
-  monto: 0,
-  tipo_ingreso: ultimoTipoIngreso.value,
-  categoria_contabilidad_id: 0,
-  notas: '',
-  cliente: ''
-})
-
-const formularioEgreso = ref<RegistroPayload>({
-  fecha: toDateTimeLocal(new Date()),
-  monto: 0,
-  tipo_egreso: ultimoTipoEgreso.value,
-  categoria_contabilidad_id: 0,
-  notas: '',
-  cliente: ''
-})
-
 const formularioMovimiento = ref<MovimientoFinancieroPayload>({
   fecha: toDateTimeLocal(new Date()),
   tipo: 'EGRESO',
@@ -91,14 +61,6 @@ const formularioMovimiento = ref<MovimientoFinancieroPayload>({
   venta_id: null
 })
 
-const guardando = ref(false)
-const error = ref<string | null>(null)
-const payloadIngreso = ref<string | null>(null)
-
-const guardandoEgreso = ref(false)
-const errorEgreso = ref<string | null>(null)
-const payloadEgreso = ref<string | null>(null)
-
 const guardandoMovimiento = ref(false)
 const errorMovimiento = ref<string | null>(null)
 const payloadMovimiento = ref<string | null>(null)
@@ -110,129 +72,6 @@ const formularioCategoria = ref({
   codigo: ''
 })
 const codigoAutoCategoria = ref<string | null>(null)
-const registrarIngreso = async () => {
-  guardando.value = true
-  error.value = null
-  mensaje.value = null
-  mensajeTipo.value = null
-  if (formularioIngreso.value.monto <= 0) {
-    error.value = 'El monto debe ser mayor a cero.'
-    guardando.value = false
-    return
-  }
-  if (
-    !formularioIngreso.value.categoria_contabilidad_id ||
-    formularioIngreso.value.categoria_contabilidad_id <= 0
-  ) {
-    error.value = 'Selecciona una categoria contable valida.'
-    guardando.value = false
-    return
-  }
-  if (formularioIngreso.value.fecha && formularioIngreso.value.fecha.length === 16) {
-    formularioIngreso.value.fecha = `${formularioIngreso.value.fecha}:00`
-  }
-  payloadIngreso.value = JSON.stringify(formularioIngreso.value, null, 2)
-  try {
-    await crearIngreso(formularioIngreso.value)
-    mensaje.value = 'Ingreso guardado correctamente.'
-    mensajeTipo.value = 'exito'
-    ultimoTipoIngreso.value = formularioIngreso.value.tipo_ingreso ?? 'EFECTIVO'
-    mostrarFormularioIngreso.value = false
-    formularioIngreso.value = {
-      fecha: toDateTimeLocal(new Date()),
-      monto: 0,
-      tipo_ingreso: ultimoTipoIngreso.value,
-      categoria_contabilidad_id: 0,
-      notas: '',
-      cliente: ''
-    }
-  } catch (err) {
-    console.error('Error al registrar ingreso', err)
-    const detalle = err instanceof Error ? err.message : String(err)
-    error.value = `No fue posible registrar el ingreso. ${detalle}`
-    mensaje.value = 'No fue posible guardar el ingreso.'
-    mensajeTipo.value = 'error'
-  } finally {
-    guardando.value = false
-  }
-}
-
-const cerrarFormularioIngreso = () => {
-  mostrarFormularioIngreso.value = false
-  formularioIngreso.value = {
-    fecha: toDateTimeLocal(new Date()),
-    monto: 0,
-    tipo_ingreso: ultimoTipoIngreso.value,
-    categoria_contabilidad_id: 0,
-    notas: '',
-    cliente: ''
-  }
-  error.value = null
-  payloadIngreso.value = null
-  mensaje.value = null
-  mensajeTipo.value = null
-}
-
-const registrarEgreso = async () => {
-  guardandoEgreso.value = true
-  errorEgreso.value = null
-  mensaje.value = null
-  mensajeTipo.value = null
-  if (formularioEgreso.value.monto <= 0) {
-    errorEgreso.value = 'El monto debe ser mayor a cero.'
-    guardandoEgreso.value = false
-    return
-  }
-  if (!formularioEgreso.value.categoria_contabilidad_id || formularioEgreso.value.categoria_contabilidad_id <= 0) {
-    errorEgreso.value = 'Selecciona una categoria contable valida.'
-    guardandoEgreso.value = false
-    return
-  }
-  if (formularioEgreso.value.fecha && formularioEgreso.value.fecha.length === 16) {
-    formularioEgreso.value.fecha = `${formularioEgreso.value.fecha}:00`
-  }
-  payloadEgreso.value = JSON.stringify(formularioEgreso.value, null, 2)
-  try {
-    await crearEgreso(formularioEgreso.value)
-    mensaje.value = 'Egreso guardado correctamente.'
-    mensajeTipo.value = 'exito'
-    ultimoTipoEgreso.value = formularioEgreso.value.tipo_egreso ?? 'EFECTIVO'
-    mostrarFormularioEgreso.value = false
-    formularioEgreso.value = {
-      fecha: toDateTimeLocal(new Date()),
-      monto: 0,
-      tipo_egreso: ultimoTipoEgreso.value,
-      categoria_contabilidad_id: 0,
-      notas: '',
-      cliente: ''
-    }
-  } catch (err) {
-    console.error('Error al registrar egreso', err)
-    const detalle = err instanceof Error ? err.message : String(err)
-    errorEgreso.value = `No fue posible registrar el egreso. ${detalle}`
-    mensaje.value = 'No fue posible guardar el egreso.'
-    mensajeTipo.value = 'error'
-  } finally {
-    guardandoEgreso.value = false
-  }
-}
-
-const cerrarFormularioEgreso = () => {
-  mostrarFormularioEgreso.value = false
-  formularioEgreso.value = {
-    fecha: toDateTimeLocal(new Date()),
-    monto: 0,
-    tipo_egreso: ultimoTipoEgreso.value,
-    categoria_contabilidad_id: 0,
-    notas: '',
-    cliente: ''
-  }
-  errorEgreso.value = null
-  payloadEgreso.value = null
-  mensaje.value = null
-  mensajeTipo.value = null
-}
-
 const registrarMovimiento = async () => {
   guardandoMovimiento.value = true
   errorMovimiento.value = null
@@ -326,12 +165,6 @@ const cargarCategoriasContables = async () => {
     }
     const data = (await respuesta.json()) as CategoriaContable[]
     categoriasContables.value = data
-    categoriasIngreso.value = data.filter((categoria) =>
-      categoria.codigo?.toUpperCase().startsWith('ING_')
-    )
-    categoriasEgreso.value = data.filter((categoria) =>
-      categoria.codigo?.toUpperCase().startsWith('EGRE_')
-    )
   } catch (err) {
     console.error('Error al cargar categorias contables', err)
     errorCategorias.value = 'No fue posible cargar categorias contables.'
@@ -406,38 +239,6 @@ watch(
   }
 )
 
-const abrirFormularioIngreso = () => {
-  mensaje.value = null
-  mensajeTipo.value = null
-  mostrarFormularioIngreso.value = true
-  formularioIngreso.value = {
-    fecha: toDateTimeLocal(new Date()),
-    monto: 0,
-    tipo_ingreso: ultimoTipoIngreso.value,
-    categoria_contabilidad_id: 0,
-    notas: '',
-    cliente: ''
-  }
-  error.value = null
-  payloadIngreso.value = null
-}
-
-const abrirFormularioEgreso = () => {
-  mensaje.value = null
-  mensajeTipo.value = null
-  mostrarFormularioEgreso.value = true
-  formularioEgreso.value = {
-    fecha: toDateTimeLocal(new Date()),
-    monto: 0,
-    tipo_egreso: ultimoTipoEgreso.value,
-    categoria_contabilidad_id: 0,
-    notas: '',
-    cliente: ''
-  }
-  errorEgreso.value = null
-  payloadEgreso.value = null
-}
-
 const abrirFormularioMovimiento = () => {
   mensaje.value = null
   mensajeTipo.value = null
@@ -468,15 +269,9 @@ const abrirFormularioCategoria = () => {
 }
 
 const abrirAccion = (titulo: string) => {
-  mostrarFormularioIngreso.value = false
-  mostrarFormularioEgreso.value = false
   mostrarFormularioMovimiento.value = false
   mostrarFormularioCategoria.value = false
-  if (titulo === 'Registrar ingreso') {
-    abrirFormularioIngreso()
-  } else if (titulo === 'Registrar egreso') {
-    abrirFormularioEgreso()
-  } else if (titulo === 'Movimientos financieros') {
+  if (titulo === 'Movimientos financieros') {
     abrirFormularioMovimiento()
   } else if (titulo === 'Categorias contables') {
     abrirFormularioCategoria()
@@ -589,132 +384,6 @@ onMounted(() => {
         </div>
       </article>
     </section>
-
-    <div
-      v-if="mostrarFormularioIngreso"
-      class="modal"
-      role="dialog"
-      aria-modal="true"
-      @click.self="cerrarFormularioIngreso"
-    >
-      <section class="contabilidad__formulario" @click.stop>
-        <div class="modal__encabezado">
-          <h2>Registrar ingreso</h2>
-          <button type="button" class="modal__cerrar" @click="cerrarFormularioIngreso">x</button>
-        </div>
-        <form class="form" @submit.prevent="registrarIngreso">
-          <label>
-            <span>Fecha</span>
-            <input v-model="formularioIngreso.fecha" type="datetime-local" step="60" required />
-          </label>
-          <label>
-            <span>Monto</span>
-            <input v-model.number="formularioIngreso.monto" type="number" min="0" step="0.01" required />
-          </label>
-          <label>
-            <span>Tipo ingreso</span>
-            <select v-model="formularioIngreso.tipo_ingreso" required>
-              <option value="EFECTIVO">EFECTIVO</option>
-              <option value="TRANSFERENCIA">TRANSFERENCIA</option>
-            </select>
-          </label>
-          <label>
-            <span>Categoria contable</span>
-            <select
-              v-model.number="formularioIngreso.categoria_contabilidad_id"
-              :disabled="cargandoCategorias || categoriasIngreso.length === 0"
-              required
-            >
-              <option :value="0" disabled>Selecciona una categoria</option>
-              <option v-for="categoria in categoriasIngreso" :key="categoria.id" :value="categoria.id">
-                {{ categoria.nombre }}
-              </option>
-            </select>
-            <small v-if="cargandoCategorias" class="ayuda">Cargando categorias...</small>
-            <small v-else-if="categoriasIngreso.length === 0" class="ayuda ayuda--error">
-              {{ errorCategorias ?? 'No hay categorias disponibles.' }}
-            </small>
-          </label>
-          <label>
-            <span>Notas</span>
-            <textarea v-model="formularioIngreso.notas" rows="2"></textarea>
-          </label>
-          <label>
-            <span>Cliente</span>
-            <input v-model="formularioIngreso.cliente" type="text" />
-          </label>
-          <button type="submit" class="boton" :disabled="guardando">
-            {{ guardando ? 'Guardando...' : 'Guardar ingreso' }}
-          </button>
-          <p v-if="error" class="form__error">{{ error }}</p>
-          <p v-if="mensaje" :class="['form__mensaje', `form__mensaje--${mensajeTipo}`]">{{ mensaje }}</p>
-          <pre v-if="payloadIngreso" class="payload">{{ payloadIngreso }}</pre>
-        </form>
-      </section>
-    </div>
-
-    <div
-      v-if="mostrarFormularioEgreso"
-      class="modal"
-      role="dialog"
-      aria-modal="true"
-      @click.self="cerrarFormularioEgreso"
-    >
-      <section class="contabilidad__formulario" @click.stop>
-        <div class="modal__encabezado">
-          <h2>Registrar egreso</h2>
-          <button type="button" class="modal__cerrar" @click="cerrarFormularioEgreso">x</button>
-        </div>
-        <form class="form" @submit.prevent="registrarEgreso">
-          <label>
-            <span>Fecha</span>
-            <input v-model="formularioEgreso.fecha" type="datetime-local" step="60" required />
-          </label>
-          <label>
-            <span>Monto</span>
-            <input v-model.number="formularioEgreso.monto" type="number" min="0" step="0.01" required />
-          </label>
-          <label>
-            <span>Tipo egreso</span>
-            <select v-model="formularioEgreso.tipo_egreso" required>
-              <option value="EFECTIVO">EFECTIVO</option>
-              <option value="TRANSFERENCIA">TRANSFERENCIA</option>
-            </select>
-          </label>
-          <label>
-            <span>Categoria contable</span>
-            <select
-              v-model.number="formularioEgreso.categoria_contabilidad_id"
-              :disabled="cargandoCategorias || categoriasEgreso.length === 0"
-              required
-            >
-              <option :value="0" disabled>Selecciona una categoria</option>
-              <option v-for="categoria in categoriasEgreso" :key="categoria.id" :value="categoria.id">
-                {{ categoria.nombre }}
-              </option>
-            </select>
-            <small v-if="cargandoCategorias" class="ayuda">Cargando categorias...</small>
-            <small v-else-if="categoriasEgreso.length === 0" class="ayuda ayuda--error">
-              {{ errorCategorias ?? 'No hay categorias disponibles.' }}
-            </small>
-          </label>
-          <label>
-            <span>Notas</span>
-            <textarea v-model="formularioEgreso.notas" rows="2"></textarea>
-          </label>
-          <label>
-            <span>Cliente</span>
-            <input v-model="formularioEgreso.cliente" type="text" />
-          </label>
-          <button type="submit" class="boton" :disabled="guardandoEgreso">
-            {{ guardandoEgreso ? 'Guardando...' : 'Guardar egreso' }}
-          </button>
-          <p v-if="errorEgreso" class="form__error">{{ errorEgreso }}</p>
-          <p v-if="mensaje" :class="['form__mensaje', `form__mensaje--${mensajeTipo}`]">{{ mensaje }}</p>
-          <pre v-if="payloadEgreso" class="payload">{{ payloadEgreso }}</pre>
-        </form>
-      </section>
-    </div>
 
     <div
       v-if="mostrarFormularioMovimiento"

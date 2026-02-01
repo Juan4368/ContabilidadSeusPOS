@@ -46,7 +46,7 @@ const productos = reactive<Producto[]>([
   }
 ])
 
-const API_PRODUCTOS = 'http://3.15.163.214/ApiPOS/productos/'
+const API_PRODUCTOS = 'http://127.0.0.1:8000/productos/'
 const API_CATEGORIAS = 'http://3.15.163.214/ApiPOS/categorias/'
 
 const form = reactive({

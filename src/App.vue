@@ -5,7 +5,6 @@ import POSView from './views/POSView.vue'
 import StockView from './views/StockView.vue'
 import AdminView from './views/AdminView.vue'
 import ProductosView from './views/ProductosView.vue'
-import PendientesView from './views/PendientesView.vue'
 import VentasPendientesView from './views/VentasPendientesView.vue'
 import ContabilidadView from './views/ContabilidadView.vue'
 import CarteraView from './views/CarteraView.vue'
@@ -18,7 +17,6 @@ type VistaId =
   | 'stock'
   | 'admin'
   | 'productos'
-  | 'pendientes'
   | 'ventas-pendientes'
 
 const vistaActiva = ref<VistaId>('pos')
@@ -48,7 +46,6 @@ const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componen
   { id: 'stock', nombre: 'Stock', descripcion: 'Inventario y reposicion', componente: StockView },
   { id: 'admin', nombre: 'Admin', descripcion: 'Usuarios y categorias', componente: AdminView },
   { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView },
-  { id: 'pendientes', nombre: 'Pendientes', descripcion: 'Registros offline', componente: PendientesView },
   { id: 'ventas-pendientes', nombre: 'Ventas pendientes', descripcion: 'Recuperar ventas', componente: VentasPendientesView }
 ]
 

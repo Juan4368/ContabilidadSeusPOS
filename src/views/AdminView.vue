@@ -3,10 +3,15 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 
 type Usuario = {
-  id: number
-  nombre: string
+  user_id: number
+  username: string
   email: string
-  estado: 'activo' | 'inactivo'
+  telephone_number: string | null
+  is_active: boolean
+  is_verified: boolean
+  last_login_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 type Categoria = {
@@ -43,7 +48,8 @@ type Proveedor = {
 const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 
 const USUARIOS_ENDPOINT = 'http://127.0.0.1:8000/usuarios/'
-const CATEGORIAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/categorias/'
+const USUARIOS_REGISTRO_ENDPOINT = 'http://127.0.0.1:8001/auth/register'
+const CATEGORIAS_ENDPOINT = 'http://127.0.0.1:8000/categorias/'
 const CATEGORIAS_CONTABILIDAD_ENDPOINT = 'http://3.15.163.214/ApiPOS/contabilidad/categorias/'
 const PROVEEDORES_ENDPOINT = 'http://3.15.163.214/ApiPOS/proveedores/'
 
@@ -61,10 +67,7 @@ const proveedores = reactive<Proveedor[]>([])
 const usuarioForm = reactive({
   username: '',
   email: '',
-  contrasena: '',
-  telefono: '',
-  activo: true,
-  verificado: true
+  password: ''
 })
 const categoriaForm = reactive({ nombre: '', descripcion: '' })
 const categoriaContabilidadForm = reactive({ nombre: '', tipo_categoria: 'INGRESO' })
@@ -111,7 +114,7 @@ const exitoProveedor = ref('')
 const avisoCache = ref('')
 const avisoCategoria = ref('')
 
-const usuariosActivos = computed(() => usuarios.filter((usuario) => usuario.estado === 'activo').length)
+const usuariosActivos = computed(() => usuarios.filter((usuario) => usuario.is_active).length)
 const totalClientes = computed(() => clientes.length)
 
 const cargarUsuarios = async () => {
@@ -122,28 +125,45 @@ const cargarUsuarios = async () => {
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = await respuesta.json()
+    const dataObj = data as Record<string, unknown>
     const lista =
       Array.isArray(data)
         ? data
-        : Array.isArray(data.results)
-          ? data.results
-          : Array.isArray(data.data)
-            ? data.data
-            : Array.isArray((data as Record<string, unknown>)?.data?.results)
-              ? (data as Record<string, unknown>).data.results
-              : Array.isArray((data as Record<string, unknown>)?.items)
-                ? (data as Record<string, unknown>).items
-                : []
+        : Array.isArray(dataObj.results)
+          ? dataObj.results
+          : Array.isArray(dataObj.data)
+            ? dataObj.data
+            : Array.isArray((dataObj.data as Record<string, unknown>)?.results)
+              ? (dataObj.data as Record<string, unknown>).results
+              : Array.isArray(dataObj.items)
+                ? dataObj.items
+                : dataObj && typeof dataObj === 'object' && 'user_id' in dataObj
+                  ? [dataObj]
+                  : []
     const normalizados = lista
       .map((item: unknown, index: number) => {
         if (!item || typeof item !== 'object') return null
         const usuario = item as Record<string, unknown>
-        const id = Number(usuario.user_id ?? usuario.id ?? index + 1)
-        const nombre = String(usuario.nombre_completo ?? usuario.nombre ?? 'Usuario')
-        const email = String(usuario.correo ?? usuario.email ?? '')
-        const activoRaw = usuario.activo
-        const estado = activoRaw === false ? 'inactivo' : 'activo'
-        return { id, nombre, email, estado } as Usuario
+        const user_id = Number(usuario.user_id ?? usuario.id ?? index + 1)
+        const username = String(usuario.username ?? usuario.nombre_usuario ?? usuario.nombre ?? 'Usuario')
+        const email = String(usuario.email ?? usuario.correo ?? '')
+        const telephone_number = (usuario.telephone_number ?? usuario.telefono ?? null) as string | null
+        const is_active = usuario.is_active === false || usuario.activo === false ? false : true
+        const is_verified = usuario.is_verified === true || usuario.verificado === true
+        const last_login_at = (usuario.last_login_at ?? usuario.ultimo_acceso ?? null) as string | null
+        const created_at = String(usuario.created_at ?? usuario.createdAt ?? '')
+        const updated_at = String(usuario.updated_at ?? usuario.updatedAt ?? '')
+        return {
+          user_id,
+          username,
+          email,
+          telephone_number,
+          is_active,
+          is_verified,
+          last_login_at,
+          created_at,
+          updated_at
+        } as Usuario
       })
       .filter(Boolean) as Usuario[]
     usuarios.splice(0, usuarios.length, ...normalizados)
@@ -155,10 +175,7 @@ const cargarUsuarios = async () => {
 const limpiarUsuario = () => {
   usuarioForm.username = ''
   usuarioForm.email = ''
-  usuarioForm.contrasena = ''
-  usuarioForm.telefono = ''
-  usuarioForm.activo = true
-  usuarioForm.verificado = true
+  usuarioForm.password = ''
 }
 
 const limpiarCategoria = () => {
@@ -314,30 +331,23 @@ const crearUsuario = async () => {
   errorUsuario.value = ''
   exitoUsuario.value = ''
   const username = usuarioForm.username.trim()
-  const email = usuarioForm.email.trim().toLowerCase()
-  const contrasena = usuarioForm.contrasena.trim()
-  const telefono = usuarioForm.telefono.trim()
+  const emailRaw = usuarioForm.email.trim()
+  const email = emailRaw ? emailRaw.toLowerCase() : ''
+  const password = usuarioForm.password.trim()
 
-  if (!username || !email || !contrasena || !telefono) {
-    errorUsuario.value = 'Completa usuario, email, contraseña y teléfono.'
+  if (!username || !password) {
+    errorUsuario.value = 'Completa usuario y contraseña.'
     return
   }
 
   try {
-    const ahora = new Date().toISOString()
     const payload = {
       username,
-      email,
-      password_hash: contrasena,
-      thelefone_number: telefono,
-      is_active: usuarioForm.activo,
-      is_verified: usuarioForm.verificado,
-      last_login_at: ahora,
-      created_at: ahora,
-      updated_at: ahora
+      password,
+      ...(email ? { email } : {})
     }
 
-    const respuesta = await fetch(USUARIOS_ENDPOINT, {
+    const respuesta = await fetch(USUARIOS_REGISTRO_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -348,17 +358,24 @@ const crearUsuario = async () => {
     }
     const data = (await respuesta.json()) as Record<string, unknown>
     usuarios.unshift({
-      id: Number(data.user_id ?? data.id ?? Date.now()),
-      nombre: String(data.username ?? username),
+      user_id: Number(data.user_id ?? data.id ?? Date.now()),
+      username: String(data.username ?? username),
       email: String(data.email ?? email),
-      estado: data.is_active === false ? 'inactivo' : 'activo'
+      telephone_number: (data.telephone_number ?? null) as string | null,
+      is_active: data.is_active === false ? false : true,
+      is_verified: data.is_verified === true,
+      last_login_at: (data.last_login_at ?? null) as string | null,
+      created_at: String(data.created_at ?? ''),
+      updated_at: String(data.updated_at ?? '')
     })
     limpiarUsuario()
     exitoUsuario.value = 'Usuario creado correctamente.'
     mostrarUsuarioCrear.value = false
   } catch (error) {
     console.error('Error al crear usuario', error)
-    errorUsuario.value = 'No fue posible crear el usuario.'
+    const detalle = error instanceof Error ? error.message : String(error)
+    const payloadSeguro = JSON.stringify({ username, email: email || null, password }, null, 2)
+    errorUsuario.value = `No fue posible crear el usuario. ${detalle}\nPayload:\n${payloadSeguro}`.trim()
   }
 }
 
@@ -479,7 +496,19 @@ const crearCliente = async () => {
     mostrarClienteCrear.value = false
   } catch (error) {
     console.error('Error al crear cliente', error)
-    errorCliente.value = 'No fue posible crear el cliente.'
+    const detalle = error instanceof Error ? error.message : String(error)
+    const payloadSeguro = JSON.stringify(
+      {
+        nombre,
+        telefono: telefonoPayload,
+        email: emailPayload,
+        descuento_pesos: descuentoPesos,
+        descuento_porcentaje: descuentoPorcentaje
+      },
+      null,
+      2
+    )
+    errorCliente.value = `No fue posible crear el cliente. ${detalle}\nPayload:\n${payloadSeguro}`.trim()
   }
 }
 
@@ -604,25 +633,36 @@ const crearProveedor = async () => {
 }
 
 const toggleEstado = async (id: number) => {
-  const usuario = usuarios.find((item) => item.id === id)
+  const usuario = usuarios.find((item) => item.user_id === id)
   if (!usuario) return
-  const estadoAnterior = usuario.estado
-  const nuevoEstado = usuario.estado === 'activo' ? 'inactivo' : 'activo'
-  usuario.estado = nuevoEstado
+  const estadoAnterior = usuario.is_active
+  const nuevoEstado = !usuario.is_active
+  usuario.is_active = nuevoEstado
 
   try {
-    const respuesta = await fetch(`${USUARIOS_ENDPOINT}${id}/estado`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activo: nuevoEstado === 'activo' })
-    })
-    if (!respuesta.ok) {
-      const detalle = await respuesta.text().catch(() => '')
-      throw new Error(detalle || `Error ${respuesta.status}`)
+    const endpoints = [`${USUARIOS_ENDPOINT}${id}/estado`, `${USUARIOS_ENDPOINT}${id}`]
+    let respuesta: Response | null = null
+    let errorDetalle = ''
+
+    for (const endpoint of endpoints) {
+      respuesta = await fetch(endpoint, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: nuevoEstado, activo: nuevoEstado })
+      })
+      if (respuesta.ok) {
+        errorDetalle = ''
+        break
+      }
+      errorDetalle = await respuesta.text().catch(() => '')
+    }
+
+    if (!respuesta?.ok) {
+      throw new Error(errorDetalle || `Error ${respuesta?.status ?? 'desconocido'}`)
     }
   } catch (error) {
     console.error('Error al actualizar estado', error)
-    usuario.estado = estadoAnterior
+    usuario.is_active = estadoAnterior
     errorUsuario.value = 'No fue posible actualizar el estado.'
   }
 }
@@ -875,41 +915,30 @@ onMounted(() => {
             <input v-model="usuarioForm.email" type="email" placeholder="correo@empresa.com" />
           </label>
           <label>
-            <span>Telefono</span>
-            <input v-model="usuarioForm.telefono" type="text" placeholder="3001234567" />
-          </label>
-          <label>
             <span>Contrasena</span>
-            <input v-model="usuarioForm.contrasena" type="password" placeholder="********" />
-          </label>
-          <label>
-            <span>Estado</span>
-            <select v-model="usuarioForm.activo">
-              <option :value="true">Activo</option>
-              <option :value="false">Inactivo</option>
-            </select>
-          </label>
-          <label>
-            <span>Verificado</span>
-            <select v-model="usuarioForm.verificado">
-              <option :value="true">Si</option>
-              <option :value="false">No</option>
-            </select>
+            <input v-model="usuarioForm.password" type="password" placeholder="********" />
           </label>
           <button type="submit">Crear usuario</button>
           <p v-if="errorUsuario" class="error">{{ errorUsuario }}</p>
           <p v-if="exitoUsuario" class="exito">{{ exitoUsuario }}</p>
         </form>
         <ul class="lista">
-          <li v-for="usuario in usuarios" :key="usuario.id">
+          <li v-for="usuario in usuarios" :key="usuario.user_id">
             <div>
-              <strong>{{ usuario.nombre }}</strong>
+              <strong>{{ usuario.username }}</strong>
               <small>{{ usuario.email }}</small>
+              <small>{{ usuario.telephone_number || 'Sin telefono' }}</small>
+              <small>
+                Verificado: {{ usuario.is_verified ? 'Si' : 'No' }} · Ultimo acceso:
+                {{ usuario.last_login_at || 'Sin registro' }}
+              </small>
             </div>
             <div class="acciones">
-              <span :class="['estado', usuario.estado]">{{ usuario.estado }}</span>
-              <button type="button" class="secundario" @click="toggleEstado(usuario.id)">
-                {{ usuario.estado === 'activo' ? 'Desactivar' : 'Activar' }}
+              <span :class="['estado', usuario.is_active ? 'activo' : 'inactivo']">
+                {{ usuario.is_active ? 'activo' : 'inactivo' }}
+              </span>
+              <button type="button" class="secundario" @click="toggleEstado(usuario.user_id)">
+                {{ usuario.is_active ? 'Desactivar' : 'Activar' }}
               </button>
             </div>
           </li>
@@ -1087,12 +1116,7 @@ onMounted(() => {
             <div>
               <strong>{{ cliente.nombre }}</strong>
               <small>{{ cliente.telefono }} - {{ cliente.email }}</small>
-              <small v-if="cliente.descuentoPesos || cliente.descuentoPorcentaje">
-                Descuento:
-                <span v-if="cliente.descuentoPesos">{{ cliente.descuentoPesos }}$</span>
-                <span v-if="cliente.descuentoPesos && cliente.descuentoPorcentaje"> · </span>
-                <span v-if="cliente.descuentoPorcentaje">{{ cliente.descuentoPorcentaje }}%</span>
-              </small>
+              <small>Descuento: {{ cliente.descuentoPesos ?? 0 }}$ ? {{ cliente.descuentoPorcentaje ?? 0 }}%</small>
             </div>
             <div class="acciones">
               <span class="estado">{{ cliente.createdAt ? 'Registrado' : 'Nuevo' }}</span>

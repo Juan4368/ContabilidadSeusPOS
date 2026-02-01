@@ -11,8 +11,8 @@ type PendingItem = {
   items: number
 }
 
-const VENTAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/ventas/'
-const CLIENTES_ENDPOINT = 'http://3.15.163.214/ApiPOS/clientes/'
+const VENTAS_ENDPOINT = 'http://127.0.0.1:8000/ventas/'
+const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 const pendientes = ref<PendingItem[]>([])
 const clientesMap = new Map<string, string>()
 

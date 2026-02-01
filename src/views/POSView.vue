@@ -2,16 +2,18 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import jsPDF from 'jspdf'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
+import { crearMovimientoFinanciero } from '../services/movimientosFinancieros'
 
 type Producto = {
   id: number
   backendId?: number
   nombre: string
+  descripcion?: string
   precio: number
   stock: number
   categoria: string
   destacador?: string
-  codigoBarras?: string
+  codigoBarras?: string | string[]
   estado?: boolean
 }
 
@@ -19,6 +21,7 @@ type ItemCarrito = {
   id: number
   backendId?: number
   nombre: string
+  codigoBarras?: string
   precio: number
   cantidad: number
   descuentoPct: number
@@ -33,8 +36,38 @@ type Cliente = {
   descuentoPorcentaje?: number
 }
 
-const CLIENTES_ENDPOINT = 'http://127.0.0.1:8001/clientes/'
+const CLIENTES_ENDPOINT = 'http://127.0.0.1:8000/clientes/'
 const VENTAS_ENDPOINT = 'http://3.15.163.214/ApiPOS/ventas/'
+const DEFAULT_PROVEEDOR_ID = 0
+const DEFAULT_CAJA_ID = 1
+const DEFAULT_USUARIO_ID = 23
+
+const parseJwt = (token: string): Record<string, unknown> | null => {
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const decoded = atob(normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '='))
+    return JSON.parse(decoded) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+const obtenerUsuarioIdSesion = () => {
+  try {
+    const raw = localStorage.getItem('pos_sesion')
+    if (!raw) return null
+    const data = JSON.parse(raw) as { token?: string }
+    const token = data?.token ? String(data.token) : ''
+    const payload = token ? parseJwt(token) : null
+    const idRaw = payload?.user_id ?? payload?.usuario_id ?? payload?.id ?? payload?.sub
+    const id = Number(idRaw)
+    return Number.isFinite(id) && id > 0 ? id : null
+  } catch {
+    return null
+  }
+}
 
 const productos = ref<Producto[]>([
   { id: 1, nombre: 'Café americano', precio: 2.5, stock: 18, categoria: 'Bebidas', destacador: 'Caliente' },
@@ -67,6 +100,7 @@ const estadoVenta = ref(true)
 const ventaPendienteId = ref<number | null>(null)
 const payloadVenta = ref<Record<string, unknown> | null>(null)
 const respuestaVenta = ref<unknown>(null)
+const payloadMovimiento = ref<string | null>(null)
 const mostrarTicketModal = ref(false)
 const descuentoItem = ref<ItemCarrito | null>(null)
 const tamañoPanelProductos = ref(62)
@@ -125,10 +159,12 @@ const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
       const nombre = String(nombreBackend ?? productoLocal?.nombre ?? `Producto ${id}`)
       const precio = Number(detalle.precio_unitario ?? detalle.precio ?? 0)
       const cantidad = Number(detalle.cantidad ?? 1)
+      const codigoBarras = productoLocal?.codigoBarras
       return {
         id,
         backendId: id,
         nombre,
+        codigoBarras: formatearCodigosBarras(codigoBarras),
         precio,
         cantidad,
         descuentoPct: Number(detalle.descuento_pct ?? detalle.descuentoPct ?? 0),
@@ -198,13 +234,9 @@ const actualizarEstadoConexion = () => {
 }
 
 const filtrados = computed(() => {
-  const termino = consulta.value.toLowerCase().trim()
+  const termino = normalizarTexto(consulta.value)
   return productos.value.filter((producto) => {
-    const coincideTexto =
-      termino === '' ||
-      producto.nombre.toLowerCase().includes(termino) ||
-      producto.categoria.toLowerCase().includes(termino) ||
-      (producto.codigoBarras ?? '').toLowerCase().includes(termino)
+    const coincideTexto = termino === '' || matchProductoBusqueda(producto, termino)
     const estaActivo = producto.estado !== false
     const coincideCategoria = !categoriaActiva.value || producto.categoria === categoriaActiva.value
     return coincideTexto && coincideCategoria && estaActivo
@@ -212,10 +244,57 @@ const filtrados = computed(() => {
 })
 
 const sugerencias = computed(() => {
-  const termino = consulta.value.toLowerCase().trim()
+  const termino = normalizarTexto(consulta.value)
   if (termino.length < 1) return []
   return filtrados.value
 })
+
+const normalizarCodigo = (valor: string) => valor.trim().toLowerCase()
+const normalizarTexto = (valor: string) => valor.toLowerCase().trim()
+const extraerCodigosBarras = (codigo: string | string[] | undefined) => {
+  if (!codigo) return []
+  if (Array.isArray(codigo)) {
+    return codigo.map((item) => normalizarCodigo(String(item))).filter(Boolean)
+  }
+  return String(codigo)
+    .split(/[,;|/]+|\s+/)
+    .map((item) => normalizarCodigo(item))
+    .filter(Boolean)
+}
+const extraerCodigosEntrada = (entrada: string) =>
+  String(entrada)
+    .split(/[,;|/]+|\s+/)
+    .map((item) => normalizarCodigo(item))
+    .filter(Boolean)
+const formatearCodigosBarras = (codigo: string | string[] | undefined) => {
+  const codigos = extraerCodigosBarras(codigo)
+  return codigos.length ? codigos.join(' · ') : ''
+}
+const matchProductoBusqueda = (producto: Producto, termino: string) => {
+  if (!termino) return false
+  const term = normalizarTexto(termino)
+  const nombre = normalizarTexto(producto.nombre ?? '')
+  const categoria = normalizarTexto(producto.categoria ?? '')
+  const descripcion = normalizarTexto(producto.descripcion ?? '')
+  const codigos = extraerCodigosBarras(producto.codigoBarras)
+  return (
+    nombre.includes(term) ||
+    categoria.includes(term) ||
+    descripcion.includes(term) ||
+    codigos.some((item) => item.includes(term))
+  )
+}
+const encontrarProductoPorCodigo = (codigo: string, exactOnly = false) => {
+  const codigoNormalizado = normalizarCodigo(codigo)
+  if (!codigoNormalizado) return null
+  const matchExacto = productos.value.find((producto) =>
+    extraerCodigosBarras(producto.codigoBarras).some((item) => item === codigoNormalizado)
+  )
+  if (matchExacto) return matchExacto
+  if (exactOnly) return null
+  const candidatos = productos.value.filter((producto) => matchProductoBusqueda(producto, codigoNormalizado))
+  return candidatos.length === 1 ? candidatos[0] : null
+}
 
 const CACHE_KEY = 'pos_productos_cache'
 
@@ -233,7 +312,7 @@ const cargarProductos = async () => {
   }
 
   try {
-    const respuesta = await fetch('http://3.15.163.214/ApiPOS/productos/')
+    const respuesta = await fetch('http://127.0.0.1:8000/productos/')
     if (!respuesta.ok) {
       throw new Error(`Error ${respuesta.status}`)
     }
@@ -257,11 +336,12 @@ const cargarProductos = async () => {
         const id = Number(producto.producto_id ?? producto.id ?? producto.pk ?? index + 1)
         const backendId = Number(producto.id ?? producto.producto_id ?? producto.pk ?? id)
         const nombre = String(producto.nombre ?? producto.name ?? 'Producto')
+        const descripcion = String(producto.descripcion ?? producto.description ?? '')
         const precio = Number(producto.precio_venta ?? producto.precio ?? producto.price ?? 0)
         const stock = Number(producto.stock ?? producto.existencias ?? 0)
         const categoria = String(producto.categoria_nombre ?? producto.categoria ?? producto.category ?? 'Sin categoria')
         const destacadorRaw = producto.destacador ?? producto.badge ?? producto.etiqueta
-        const codigoBarras = producto.codigo_barras ?? producto.codigoBarras
+        const codigoBarras = producto.codigo_barras ?? producto.codigoBarras ?? producto.codigo_barra ?? producto.barras
         const estadoRaw = producto.estado
         const estado = typeof estadoRaw === 'boolean' ? estadoRaw : estadoRaw === 'activo'
         const destacador = destacadorRaw ? String(destacadorRaw) : undefined
@@ -269,6 +349,7 @@ const cargarProductos = async () => {
           id,
           backendId,
           nombre,
+          descripcion,
           precio,
           stock,
           categoria,
@@ -319,6 +400,7 @@ const cargarClientes = async () => {
     console.error('No se pudieron cargar clientes', error)
   }
 }
+
 
 onMounted(() => {
   void cargarProductos()
@@ -377,6 +459,8 @@ const resumenCarrito = computed(() => {
   }
 })
 
+const subtotalDetalle = computed(() => resumenCarrito.value.subtotalBruto)
+
 const formatCurrency = (monto: number) =>
   monto.toLocaleString('es-CO', {
     style: 'currency',
@@ -412,6 +496,24 @@ watch(
   }
 )
 
+watch(
+  () => consulta.value,
+  (nuevo) => {
+    const codigos = extraerCodigosEntrada(nuevo)
+    if (!codigos.length) return
+    let agregado = false
+    for (const codigo of codigos) {
+      const producto = encontrarProductoPorCodigo(codigo, true)
+      if (!producto) continue
+      agregarAlCarrito(producto)
+      agregado = true
+    }
+    if (agregado) {
+      consulta.value = ''
+    }
+  }
+)
+
 const resumenDescuentoLinea = (item: ItemCarrito) => {
   const { descuentoPct, descuentoMonto } = calcularLinea(item)
   const piezas: string[] = []
@@ -430,6 +532,7 @@ const agregarAlCarrito = (producto: Producto) => {
       id: producto.id,
       backendId: producto.backendId,
       nombre: producto.nombre,
+      codigoBarras: formatearCodigosBarras(producto.codigoBarras),
       precio: Number(producto.precio),
       cantidad: 1,
       descuentoPct: descuentoCliente.descuentoPct,
@@ -475,12 +578,13 @@ const cobrarRapido = () => {
 const construirPayloadVenta = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
   const tipoPagoPayload = tipoPago.value === 'credito' ? null : tipoPago.value
+  const clientePayload = clienteId.value ?? 'e7098aa3-ea98-4a42-a019-2bf75a16a1ea'
   return {
     tipo_pago: tipoPagoPayload,
     estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
     user_id: 8,
-    cliente_id: clienteId.value,
+    cliente_id: clientePayload,
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
     fecha: new Date().toISOString(),
@@ -488,18 +592,20 @@ const construirPayloadVenta = (estadoOverride?: boolean) => {
       producto_id: item.backendId ?? item.id,
       cantidad: item.cantidad,
       precio_unitario: redondear2(item.precio),
-      subtotal: redondear2(totalLinea(item))
+      subtotal: redondear2(calcularLinea(item).base)
     }))
   }
 }
 
 const construirPayloadActualizacion = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
+  const clientePayload = clienteId.value ?? 'e7098aa3-ea98-4a42-a019-2bf75a16a1ea'
   return {
     estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
+    cliente_id: clientePayload,
     detalles: carrito.value.map((item) => ({
       producto_id: item.backendId ?? item.id,
       cantidad: item.cantidad,
@@ -509,9 +615,6 @@ const construirPayloadActualizacion = (estadoOverride?: boolean) => {
 }
 
 const guardarVentaApi = async (estadoOverride?: boolean) => {
-  if (!clienteId.value) {
-    throw new Error('Selecciona un cliente antes de cobrar.')
-  }
   const payload = construirPayloadVenta(estadoOverride)
   payloadVenta.value = payload
 
@@ -530,10 +633,23 @@ const guardarVentaApi = async (estadoOverride?: boolean) => {
   return contenido
 }
 
-const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
-  if (!clienteId.value) {
-    throw new Error('Selecciona un cliente antes de cobrar.')
+const registrarMovimientoIngreso = async (ventaId?: number | null) => {
+  const montoVenta = Number(resumenCarrito.value.total ?? 0)
+  const payload = {
+    fecha: new Date().toISOString(),
+    tipo: 'INGRESO',
+    monto: montoVenta,
+    concepto: 'venta',
+    proveedor_id: DEFAULT_PROVEEDOR_ID,
+    caja_id: DEFAULT_CAJA_ID,
+    usuario_id: obtenerUsuarioIdSesion() ?? DEFAULT_USUARIO_ID,
+    venta_id: ventaId && ventaId > 0 ? ventaId : null
   }
+  payloadMovimiento.value = JSON.stringify(payload, null, 2)
+  await crearMovimientoFinanciero(payload)
+}
+
+const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
   const payload = construirPayloadActualizacion(estadoOverride)
   payloadVenta.value = payload
 
@@ -558,11 +674,22 @@ const cerrarVenta = async () => {
     return
   }
   try {
+    let respuestaVenta: Record<string, unknown> | null = null
     if (ventaPendienteId.value) {
-      await actualizarVentaApi(ventaPendienteId.value, true)
+      respuestaVenta = (await actualizarVentaApi(ventaPendienteId.value, true)) as Record<string, unknown>
       ventaPendienteId.value = null
     } else {
-      await guardarVentaApi(true)
+      respuestaVenta = (await guardarVentaApi(true)) as Record<string, unknown>
+    }
+    const idRaw = respuestaVenta?.venta_id ?? respuestaVenta?.id ?? ventaPendienteId.value
+    const ventaIdFinal = idRaw !== null && idRaw !== undefined ? Number(idRaw) : NaN
+    try {
+      await registrarMovimientoIngreso(Number.isFinite(ventaIdFinal) ? ventaIdFinal : null)
+      ultimaAccion.value = 'Movimiento financiero registrado'
+    } catch (error) {
+      const detalle = error instanceof Error ? error.message : String(error)
+      console.error('No se pudo registrar el movimiento financiero', error)
+      ultimaAccion.value = detalle
     }
     limpiarCarrito()
     notaRapida.value = ''
@@ -760,6 +887,7 @@ const guardarTicket = () => {
                     Descuento
                   </button>
                 </div>
+                <small v-if="item.codigoBarras" class="linea__codigo">Cod: {{ item.codigoBarras }}</small>
               </div>
               <div class="linea__acciones">
                 <button type="button" @click.stop="actualizarCantidad(item.id, -1)">-</button>
@@ -776,6 +904,9 @@ const guardarTicket = () => {
               </div>
               <div class="linea__totales">
                 <strong>{{ formatCurrency(totalLinea(item)) }}</strong>
+                <small v-if="item.descuentoPct || item.descuentoMonto" class="linea__precio-original">
+                  Antes: {{ formatCurrency(calcularLinea(item).base) }}
+                </small>
                 <small v-if="item.descuentoPct || item.descuentoMonto">{{ resumenDescuentoLinea(item) }}</small>
                 <small v-else class="linea__descuento-vacio">Sin descuento</small>
               </div>
@@ -859,7 +990,7 @@ const guardarTicket = () => {
         <dl class="totales">
           <div>
             <dt>Subtotal</dt>
-            <dd>{{ formatCurrency(resumenCarrito.subtotalBruto) }}</dd>
+            <dd>{{ formatCurrency(subtotalDetalle) }}</dd>
           </div>
           <div>
             <dt>Desc. productos</dt>
@@ -882,8 +1013,6 @@ const guardarTicket = () => {
             <button type="button" class="boton primario" @click="cerrarVenta">Cobrar F10</button>
           </div>
         </div>
-        <pre v-if="payloadVenta" class="payload">{{ payloadVenta }}</pre>
-        <pre v-if="respuestaVenta" class="payload">{{ respuestaVenta }}</pre>
       </section>
     </section>
 
@@ -1242,6 +1371,12 @@ const guardarTicket = () => {
   font-size: 0.8rem;
 }
 
+.linea__codigo {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
 .linea__acciones {
   display: inline-flex;
   align-items: center;
@@ -1288,6 +1423,11 @@ const guardarTicket = () => {
 .linea__totales small {
   color: #facc15;
   font-size: 0.75rem;
+}
+
+.linea__precio-original {
+  color: #94a3b8;
+  font-size: 0.7rem;
 }
 
 .linea__descuento-boton {
