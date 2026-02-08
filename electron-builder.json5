@@ -1,11 +1,13 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "YourAppID",
+  "appId": "com.seuspos.app",
   "asar": true,
-  "productName": "YourAppName",
+  "productName": "SeusPOS",
+  "executableName": "SeusPOS",
   "directories": {
-    "output": "release/${version}"
+    "output": "release/${version}",
+    "buildResources": "build"
   },
   "files": [
     "dist",
@@ -20,7 +22,7 @@
   "win": {
     "sign": null,
     "signAndEditExecutable": false,
-    "icon": "C:\\Users\\LENOVO\\Documents\\SeusPos.png",
+    "icon": "seuspos.png",
     "target": [
       {
         "target": "nsis",
@@ -29,7 +31,7 @@
         ]
       }
     ],
-    "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
+    "artifactName": "SeusPOS-Setup-${version}.${ext}"
   },
   "nsis": {
     "oneClick": false,

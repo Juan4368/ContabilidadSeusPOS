@@ -30,9 +30,14 @@ const enviar = () => {
   <main class="login">
     <section class="login__card">
       <header class="login__header">
-        <p class="login__overline">Acceso</p>
-        <h1>Inicia sesión</h1>
-        <p class="login__sub">Ingresa tu usuario y contraseña para continuar.</p>
+        <div>
+          <p class="login__overline">Acceso</p>
+          <h1>Inicia sesión</h1>
+          <p class="login__sub">Ingresa tu usuario y contraseña para continuar.</p>
+        </div>
+        <div class="login__logo">
+          <img src="/logo-placeholder.svg" alt="Logo de prueba" />
+        </div>
       </header>
       <form class="login__form" @submit.prevent="enviar">
         <label>
@@ -62,7 +67,7 @@ const enviar = () => {
 }
 
 .login__card {
-  width: min(420px, 100%);
+  width: min(720px, 100%);
   padding: 1.5rem;
   border-radius: 1rem;
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -75,6 +80,21 @@ const enviar = () => {
 .login__header h1 {
   margin: 0.2rem 0 0.4rem;
   font-size: 1.5rem;
+}
+
+.login__header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1rem;
+  align-items: center;
+}
+
+.login__logo img {
+  width: 180px;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
 }
 
 .login__overline {
@@ -102,13 +122,19 @@ const enviar = () => {
   font-weight: 600;
 }
 
-.login__form input {
+.login__form input,
+.login__form select {
   border-radius: 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
-  padding: 0.65rem 0.85rem;
+  padding: 0.5rem 0.7rem;
   background: rgba(12, 13, 16, 0.92);
   color: #e2e8f0;
 }
+
+.login__form input {
+  max-width: 260px;
+}
+
 
 .login__boton {
   border: none;

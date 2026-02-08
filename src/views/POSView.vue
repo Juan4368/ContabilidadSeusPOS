@@ -41,7 +41,6 @@ const CLIENTES_ENDPOINT = ENDPOINTS.CLIENTES
 const VENTAS_ENDPOINT = ENDPOINTS.VENTAS_POS
 const DEFAULT_PROVEEDOR_ID = 0
 const DEFAULT_CAJA_ID = 1
-const DEFAULT_USUARIO_ID = 23
 
 
 const productos = ref<Producto[]>([
@@ -86,6 +85,14 @@ const resumenCobro = ref({
   pagoRecibido: 0,
   cambio: 0
 })
+const pagoRecibidoModalInput = ref('')
+const parsePesos = (valor: string) => Number(String(valor).replace(/[^\d]/g, '')) || 0
+const pagoRecibidoModalValor = computed(() => parsePesos(pagoRecibidoModalInput.value))
+const cambioModal = computed(() => Math.max(pagoRecibidoModalValor.value - resumenCobro.value.total, 0))
+const onPagoRecibidoModalInput = (event: Event) => {
+  const value = (event.target as HTMLInputElement).value
+  pagoRecibidoModalInput.value = formatCurrency(parsePesos(value))
+}
 const numeroFacturaResumen = ref('')
 const reciboItems = ref<ItemCarrito[]>([])
 const descuentoItem = ref<ItemCarrito | null>(null)
@@ -192,6 +199,24 @@ const manejarAtajos = (event: KeyboardEvent) => {
   if (event.key === 'F10') {
     event.preventDefault()
     void cerrarVenta()
+  } else if (event.key === 'F1') {
+    event.preventDefault()
+    tipoPago.value = 'efectivo'
+  } else if (event.key === 'F2') {
+    event.preventDefault()
+    abrirDescuentoUltimoItem()
+  } else if (event.key === 'F3') {
+    event.preventDefault()
+    tipoPago.value = 'transferencia'
+  } else if (event.key === 'F4') {
+    event.preventDefault()
+    tipoPago.value = 'credito'
+  } else if (event.key === 'F5') {
+    event.preventDefault()
+    tipoPago.value = 'tarjeta'
+  } else if (event.key === 'F6') {
+    event.preventDefault()
+    focusUltimaCantidad()
   } else if (event.key === 'F9') {
     event.preventDefault()
     mostrarTicketModal.value = true
@@ -210,11 +235,49 @@ const manejarClickFueraBuscador = (event: MouseEvent) => {
     consulta.value = ''
   }
 }
+const focusUltimaCantidad = () => {
+  const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('.linea__cantidad'))
+  const target = inputs.at(-1)
+  if (target) {
+    target.focus()
+    target.select()
+  }
+}
+const abrirDescuentoUltimoItem = () => {
+  const ultimo = carrito.value.at(-1)
+  if (ultimo) {
+    abrirModalDescuento(ultimo)
+  }
+}
+const manejarClickFueraCliente = (event: MouseEvent) => {
+  const target = event.target as Node | null
+  if (!clienteDropdownRef.value || !target) return
+  if (!clienteDropdownRef.value.contains(target)) {
+    clienteDropdownOpen.value = false
+  }
+}
+const seleccionarCliente = (cliente: Cliente) => {
+  clienteId.value = cliente.id
+  clienteQuery.value = `${cliente.nombre}${cliente.documento ? ` - ${cliente.documento}` : ''}`
+  clienteDropdownOpen.value = false
+}
 const clientes = ref<Cliente[]>([])
 const clienteId = ref<string | null>(null)
 const clienteSeleccionado = computed(
   () => clientes.value.find((cliente) => cliente.id === clienteId.value) ?? null
 )
+const clienteQuery = ref('')
+const clienteDropdownOpen = ref(false)
+const clienteDropdownRef = ref<HTMLElement | null>(null)
+const clientesFiltrados = computed(() => {
+  const term = normalizarTexto(clienteQuery.value)
+  if (!term) return clientes.value
+  return clientes.value.filter((cliente) => {
+    const nombre = normalizarTexto(cliente.nombre)
+    const documento = normalizarTexto(cliente.documento ?? '')
+    return nombre.includes(term) || documento.includes(term)
+  })
+})
 const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
 const actualizarEstadoConexion = () => {
   isOnline.value = navigator.onLine
@@ -417,6 +480,7 @@ onMounted(() => {
   window.addEventListener('pos:cargar-pendiente', cargarPendienteEvento)
   window.addEventListener('keydown', manejarAtajos)
   window.addEventListener('click', manejarClickFueraBuscador)
+  window.addEventListener('click', manejarClickFueraCliente)
 })
 
 onBeforeUnmount(() => {
@@ -428,6 +492,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pos:cargar-pendiente', cargarPendienteEvento as EventListener)
   window.removeEventListener('keydown', manejarAtajos)
   window.removeEventListener('click', manejarClickFueraBuscador)
+  window.removeEventListener('click', manejarClickFueraCliente)
 })
 
 const normalizarDescuento = (valor: number | undefined) => Math.min(Math.max(valor ?? 0, 0), 100)
@@ -498,6 +563,12 @@ watch(
       descuentoPct: descuentoCliente.descuentoPct,
       descuentoMonto: descuentoCliente.descuentoMonto
     }))
+    const seleccionado = clienteSeleccionado.value
+    if (seleccionado) {
+      clienteQuery.value = `${seleccionado.nombre}${seleccionado.documento ? ` - ${seleccionado.documento}` : ''}`
+    } else {
+      clienteQuery.value = ''
+    }
   }
 )
 
@@ -658,6 +729,7 @@ const registrarMovimientoIngreso = async (ventaId?: number | null) => {
     fecha: new Date().toISOString(),
     tipo: 'INGRESO' as const,
     monto: montoVenta,
+    concepto: 'venta',
     proveedor_id: DEFAULT_PROVEEDOR_ID,
     caja_id: DEFAULT_CAJA_ID,
     usuario_id: usuarioPayload,
@@ -728,6 +800,7 @@ const cerrarVenta = async () => {
     estadoVenta.value = true
     ultimaAccion.value = 'Venta registrada'
     resumenCobro.value = snapshot
+    pagoRecibidoModalInput.value = formatCurrency(snapshot.pagoRecibido || snapshot.total)
     reciboItems.value = snapshotItems
     mostrarResumenCobro.value = true
   } catch (error) {
@@ -882,14 +955,63 @@ const imprimirTicketResumen = () => {
 
 <template>
   <main class="pos">
-    <header class="cabecera">
-      <div>
-        <p class="cabecera__nota">{{ notaRapida }}</p>
+    <header class="pos-topbar">
+      <div class="topbar__left">
+        <button type="button" class="icon-btn" aria-label="Menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 6h18M3 12h18M3 18h12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" />
+          </svg>
+        </button>
+        <button type="button" class="icon-btn" aria-label="Lista">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"
+              stroke="currentColor"
+              stroke-width="2"
+              fill="none"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+        <button type="button" class="icon-btn" aria-label="Etiquetas">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M20 12l-8 8-9-9V4h7l10 8zM7 7h.01"
+              stroke="currentColor"
+              stroke-width="2"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
       </div>
-      <div class="cabecera__chips">
+      <div ref="buscadorRef" class="topbar__search">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none" />
+          <path d="M20 20l-3.5-3.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" />
+        </svg>
+        <input v-model="consulta" type="search" placeholder="Buscar producto por nombre" />
+        <ul v-if="sugerencias.length" class="sugerencias" role="listbox">
+          <li v-for="producto in sugerencias" :key="producto.id">
+            <button
+              type="button"
+              class="sugerencia"
+              @click="
+                agregarAlCarrito(producto);
+                consulta = ''
+              "
+            >
+              <span class="sugerencia__nombre">{{ producto.nombre }}</span>
+              <span class="sugerencia__precio">{{ formatCurrency(producto.precio) }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+      <div class="topbar__right">
         <span class="chip">Caja 01</span>
         <span class="chip" :class="isOnline ? 'chip--online' : 'chip--offline'">
-          {{ isOnline ? 'En línea' : 'Offline' }}
+          {{ isOnline ? 'En linea' : 'Offline' }}
         </span>
       </div>
     </header>
@@ -900,33 +1022,29 @@ const imprimirTicketResumen = () => {
     >
       <section class="panel productos">
         <div class="panel__encabezado">
-          <label class="cabecera__cliente">
-            <span>Cliente</span>
-            <select v-model="clienteId">
-              <option :value="null">Selecciona un cliente</option>
-              <option v-for="cliente in clientes" :key="cliente.id" :value="cliente.id">
-                {{ cliente.nombre }}{{ cliente.documento ? ` - ${cliente.documento}` : '' }}
-              </option>
-            </select>
-          </label>
-          <div ref="buscadorRef" class="buscador">
-            <input v-model="consulta" type="search" placeholder="Busque por nombre o codigo de barras..." />
-            <ul v-if="sugerencias.length" class="sugerencias" role="listbox">
-              <li v-for="producto in sugerencias" :key="producto.id">
-                <button
-                  type="button"
-                  class="sugerencia"
-                  @click="
-                    agregarAlCarrito(producto);
-                    consulta = ''
-                  "
-                >
-                  <span class="sugerencia__nombre">{{ producto.nombre }}</span>
-                  <span class="sugerencia__precio">{{ formatCurrency(producto.precio) }}</span>
+          <div ref="clienteDropdownRef" class="cliente-select">
+            <label class="cliente-select__label">Cliente</label>
+            <input
+              v-model="clienteQuery"
+              type="text"
+              class="cliente-select__input"
+              placeholder="Buscar cliente..."
+              @focus="clienteDropdownOpen = true"
+              @input="clienteDropdownOpen = true"
+            />
+            <ul v-if="clienteDropdownOpen" class="cliente-select__list" role="listbox">
+              <li>
+                <button type="button" class="cliente-select__item" @click="clienteId = null; clienteQuery = ''; clienteDropdownOpen = false">
+                  Sin cliente
                 </button>
               </li>
+              <li v-for="cliente in clientesFiltrados" :key="cliente.id">
+                <button type="button" class="cliente-select__item" @click="seleccionarCliente(cliente)">
+                  {{ cliente.nombre }}{{ cliente.documento ? ` - ${cliente.documento}` : '' }}
+                </button>
+              </li>
+              <li v-if="!clientesFiltrados.length" class="cliente-select__empty">No hay resultados</li>
             </ul>
-
           </div>
           <div class="categorias">
             <button
@@ -953,10 +1071,17 @@ const imprimirTicketResumen = () => {
           </div>
         </header>
 
+        <div class="tabla-header" aria-hidden="true">
+          <span>Nombre del producto</span>
+          <span>Cantidad</span>
+          <span>Precio</span>
+          <span>Total</span>
+        </div>
+
         <ul class="lineas" aria-live="polite">
           <li v-for="item in carrito" :key="item.id" class="linea">
             <div class="linea__fila">
-              <div>
+              <div class="linea__producto">
                 <div class="linea__principal">
                   <p class="linea__titulo">{{ item.nombre }}</p>
                   <button type="button" class="linea__descuento-boton" @click="abrirModalDescuento(item)">
@@ -978,6 +1103,7 @@ const imprimirTicketResumen = () => {
                 <button type="button" @click.stop="actualizarCantidad(item.id, 1)">+</button>
                 <button type="button" class="linea__eliminar" @click.stop="eliminarItem(item.id)">×</button>
               </div>
+              <div class="linea__precio-col">{{ formatCurrency(item.precio) }}</div>
               <div class="linea__totales">
                 <strong>{{ formatCurrency(totalLinea(item)) }}</strong>
                 <small v-if="item.descuentoPct || item.descuentoMonto" class="linea__precio-original">
@@ -1003,53 +1129,58 @@ const imprimirTicketResumen = () => {
       >
         <span class="splitter__handle"></span>
       </div>
-
       <section class="panel detalle">
         <div class="detalle-venta">
-          <label>
-            <div class="tipo-pago" role="group" aria-label="Tipo de pago">
-              <button
-                type="button"
-                class="tipo-pago__boton"
-                :class="{ activo: tipoPago === 'efectivo' }"
-                @click="tipoPago = 'efectivo'"
-              >
-                Efectivo
-              </button>
-              <button
-                type="button"
-                class="tipo-pago__boton"
-                :class="{ activo: tipoPago === 'tarjeta' }"
-                @click="tipoPago = 'tarjeta'"
-              >
-                Tarjeta
-              </button>
-              <button
-                type="button"
-                class="tipo-pago__boton"
-                :class="{ activo: tipoPago === 'transferencia' }"
-                @click="tipoPago = 'transferencia'"
-              >
-                Transferencia
-              </button>
-              <button
-                type="button"
-                class="tipo-pago__boton"
-                :class="{ activo: tipoPago === 'credito' }"
-                @click="tipoPago = 'credito'"
-              >
-                Credito
-              </button>
-              <button
-                type="button"
-                class="tipo-pago__boton"
-                :class="{ activo: tipoPago === 'otro' }"
-                @click="tipoPago = 'otro'"
-              >
-                Otro
-              </button>
-            </div>
-          </label>
+          <div class="tipo-pago" role="group" aria-label="Tipo de pago">
+            <button
+              type="button"
+              class="tipo-pago__boton"
+              :class="{ activo: tipoPago === 'efectivo' }"
+              @click="tipoPago = 'efectivo'"
+            >
+              <span class="tipo-pago__key">F1</span>
+              <span>Efectivo</span>
+            </button>
+            <button
+              type="button"
+              class="tipo-pago__boton"
+              @click="abrirDescuentoUltimoItem"
+            >
+              <span class="tipo-pago__key">F2</span>
+              <span>Descuento</span>
+            </button>
+            <button
+              type="button"
+              class="tipo-pago__boton"
+              :class="{ activo: tipoPago === 'transferencia' }"
+              @click="tipoPago = 'transferencia'"
+            >
+              <span class="tipo-pago__key">F3</span>
+              <span>Transfer</span>
+            </button>
+            <button
+              type="button"
+              class="tipo-pago__boton"
+              :class="{ activo: tipoPago === 'credito' }"
+              @click="tipoPago = 'credito'"
+            >
+              <span class="tipo-pago__key">F4</span>
+              <span>Credito</span>
+            </button>
+            <button
+              type="button"
+              class="tipo-pago__boton"
+              :class="{ activo: tipoPago === 'tarjeta' }"
+              @click="tipoPago = 'tarjeta'"
+            >
+              <span class="tipo-pago__key">F5</span>
+              <span>Tarjeta</span>
+            </button>
+            <button type="button" class="tipo-pago__boton">
+              <span class="tipo-pago__key">F6</span>
+              <span>Cantidad</span>
+            </button>
+          </div>
         </div>
 
         <div class="controles">
@@ -1185,6 +1316,19 @@ const imprimirTicketResumen = () => {
           <h2>Resumen de cobro</h2>
           <button type="button" class="modal__cerrar" @click="mostrarResumenCobro = false">x</button>
         </div>
+        <div class="cobro-input">
+          <label>Pago recibido</label>
+          <input
+            :value="pagoRecibidoModalInput"
+            type="text"
+            inputmode="numeric"
+            placeholder="$ 0"
+            @input="onPagoRecibidoModalInput"
+          />
+          <div class="cobro-input__cambio">
+            Cambio a dar: <strong>{{ formatCurrency(cambioModal) }}</strong>
+          </div>
+        </div>
         <dl class="totales">
           <div>
             <dt>Subtotal</dt>
@@ -1200,11 +1344,11 @@ const imprimirTicketResumen = () => {
           </div>
           <div>
             <dt>Pago recibido</dt>
-            <dd>{{ formatCurrency(resumenCobro.pagoRecibido) }}</dd>
+            <dd>{{ formatCurrency(pagoRecibidoModalValor) }}</dd>
           </div>
           <div class="cambio">
             <dt>Cambio</dt>
-            <dd>{{ formatCurrency(resumenCobro.cambio) }}</dd>
+            <dd>{{ formatCurrency(cambioModal) }}</dd>
           </div>
         </dl>
         <div class="modal__acciones">
@@ -1220,48 +1364,164 @@ const imprimirTicketResumen = () => {
 <style scoped>
 .pos {
   display: grid;
-  gap: 1.5rem;
+  grid-template-rows: auto 1fr;
+  gap: 0.75rem;
+  min-height: 100%;
+  padding: 0.75rem;
+  background: #2b2b2b;
+  color: #e5e7eb;
 }
 
-.cabecera {
+.pos-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  background: #3b3b3b;
+  border: 1px solid #434343;
+  border-radius: 0.85rem;
+  padding: 0.45rem 0.75rem;
+}
+
+.topbar__left,
+.topbar__right {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.cabecera__prefijo {
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.8rem;
-  color: #94a3b8;
+.icon-btn {
+  border: 1px solid #4b4b4b;
+  background: #2f2f2f;
+  color: #d1d5db;
+  border-radius: 0.65rem;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
 }
 
-.cabecera h1 {
-  margin: 0;
-  font-size: clamp(1.8rem, 2.2vw, 2.4rem);
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
-.cabecera__nota {
-  margin: 0.2rem 0 0;
-  color: #cbd5e1;
+.topbar__search {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  background: #262626;
+  border: 1px solid #444;
+  border-radius: 0.7rem;
+  padding: 0.25rem 0.6rem;
 }
 
-.cabecera__cliente {
-  margin-top: 0.8rem;
+.topbar__search svg {
+  width: 18px;
+  height: 18px;
+  color: #9ca3af;
+}
+
+.topbar__search input {
+  border: none;
+  background: transparent;
+  color: #e5e7eb;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.topbar__search .sugerencias {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+}
+
+.chip {
+  background: #2f2f2f;
+  border: 1px solid #484848;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.7rem;
+  color: #f3f4f6;
+  font-size: 0.85rem;
+}
+
+.chip--online {
+  border-color: #166534;
+  background: #0f2f1b;
+  color: #bbf7d0;
+}
+
+.chip--offline {
+  border-color: #7f1d1d;
+  background: #2a1111;
+  color: #fecaca;
+}
+
+.cliente-select {
+  position: relative;
   display: grid;
   gap: 0.35rem;
-  color: #e2e8f0;
-  font-weight: 600;
 }
 
-.cabecera__cliente select {
-  border-radius: 0.9rem;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  padding: 0.7rem 0.9rem;
-  background: rgba(2, 6, 23, 0.6);
-  color: #e2e8f0;
+.cliente-select__label {
+  color: #e5e7eb;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.cliente-select__input {
+  border-radius: 0.7rem;
+  border: 1px solid #4a4a4a;
+  padding: 0.45rem 0.6rem;
+  background: #1f1f1f;
+  color: #e5e7eb;
+}
+
+.cliente-select__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  background: #1c1c1c;
+  border: 1px solid #3a3a3a;
+  border-radius: 0.7rem;
+  z-index: 25;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cliente-select__item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #333;
+  background: #252525;
+  color: #e5e7eb;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.6rem;
+  cursor: pointer;
+}
+
+.cliente-select__item:hover,
+.cliente-select__item:focus-visible {
+  outline: none;
+  border-color: #38bdf8;
+  background: #223241;
+}
+
+.cliente-select__empty {
+  padding: 0.4rem 0.5rem;
+  color: #9ca3af;
+  font-size: 0.85rem;
 }
 
 .cabecera__chips {
@@ -1299,8 +1559,8 @@ const imprimirTicketResumen = () => {
 
 .layout {
   display: grid;
-  grid-template-columns: 1.6fr 1fr;
-  gap: 1rem;
+  grid-template-columns: 1fr 320px;
+  gap: 0.6rem;
 }
 
 .layout--split {
@@ -1308,13 +1568,18 @@ const imprimirTicketResumen = () => {
 }
 
 .panel {
-  background: #0d0f14;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 1rem;
-  padding: 1.25rem;
-  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.55);
+  background: #2a2a2a;
+  border: 1px solid #3c3c3c;
+  border-radius: 0.9rem;
+  padding: 0.8rem;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
   display: grid;
-  gap: 1rem;
+  gap: 0.8rem;
+}
+
+.detalle {
+  align-content: start;
+  gap: 0.6rem;
 }
 
 .splitter {
@@ -1336,11 +1601,36 @@ const imprimirTicketResumen = () => {
   box-shadow: 0 0 12px rgba(250, 204, 21, 0.6);
 }
 
+.panel-atajos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.atajo {
+  display: grid;
+  gap: 0.2rem;
+  justify-items: center;
+  padding: 0.5rem;
+  border: 1px solid #4b4b4b;
+  background: #2b2b2b;
+  color: #e5e7eb;
+  border-radius: 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.atajo__key {
+  font-size: 0.7rem;
+  color: #cbd5e1;
+}
+
 .productos {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   max-height: none;
+  min-height: 0;
 }
 
 .panel__encabezado {
@@ -1438,6 +1728,23 @@ const imprimirTicketResumen = () => {
   background: rgba(255, 255, 255, 0.07);
 }
 
+.tabla-header {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 140px 120px 120px;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: #252525;
+  border: 1px solid #3a3a3a;
+  border-radius: 0.7rem;
+  font-size: 0.8rem;
+  color: #c7c7c7;
+  text-transform: uppercase;
+}
+
+.tabla-header span {
+  letter-spacing: 0.04em;
+}
+
 .carrito .lineas {
   margin: 0;
   padding: 0;
@@ -1449,24 +1756,36 @@ const imprimirTicketResumen = () => {
 
 .linea {
   display: grid;
-  gap: 0.45rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 0.75rem;
-  background: rgba(13, 15, 20, 0.9);
+  gap: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid #3a3a3a;
+  background: transparent;
+}
+
+.lineas {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.linea:last-child {
+  border-bottom: none;
 }
 
 .linea__fila {
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 0.6rem;
+  grid-template-columns: minmax(240px, 1fr) 140px 120px 120px;
+  gap: 0.5rem;
   align-items: center;
 }
 
 .lineavacia {
   text-align: center;
-  color: #94a3b8;
+  color: #9ca3af;
   border-style: dashed;
+  padding: 1.25rem 0;
 }
 
 .linea__titulo {
@@ -1480,6 +1799,17 @@ const imprimirTicketResumen = () => {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
+}
+
+.linea__producto {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.linea__precio-col {
+  text-align: right;
+  color: #cbd5e1;
+  font-weight: 600;
 }
 
 .linea__titulo {
@@ -1501,27 +1831,28 @@ const imprimirTicketResumen = () => {
 .linea__acciones {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.25rem;
+  justify-content: center;
 }
 
 .linea__acciones button {
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  background: rgba(120, 126, 137, 0.12);
-  color: #e2e8f0;
-  width: 1.85rem;
-  height: 1.85rem;
+  border: 1px solid #4a4a4a;
+  background: #2c2c2c;
+  color: #e5e7eb;
+  width: 28px;
+  height: 28px;
   border-radius: 0.6rem;
   cursor: pointer;
 }
 
 .linea__cantidad {
-  width: 56px;
+  width: 64px;
   text-align: center;
   border-radius: 0.6rem;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(12, 13, 16, 0.92);
-  color: #e2e8f0;
-  padding: 0.2rem 0.35rem;
+  border: 1px solid #4a4a4a;
+  background: #1f1f1f;
+  color: #e5e7eb;
+  padding: 0.15rem 0.3rem;
   font-weight: 600;
 }
 
@@ -1568,17 +1899,16 @@ const imprimirTicketResumen = () => {
 
 .controles {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
   padding-top: 0.25rem;
 }
 
 .detalle-venta {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.9rem;
+  gap: 0.6rem;
   padding-bottom: 0.25rem;
-  border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
+  border-bottom: 1px solid #3a3a3a;
 }
 
 .detalle-venta label {
@@ -1590,7 +1920,7 @@ const imprimirTicketResumen = () => {
 
 .detalle-venta input,
 .detalle-venta select {
-  border-radius: 0.75rem;
+  border-radius: 0.85rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
   padding: 0.6rem 0.8rem;
   background: rgba(12, 13, 16, 0.92);
@@ -1598,9 +1928,9 @@ const imprimirTicketResumen = () => {
 }
 
 .tipo-pago {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
 }
 
 .detalle-venta .tipo-pago {
@@ -1608,27 +1938,36 @@ const imprimirTicketResumen = () => {
 }
 
 .tipo-pago__boton {
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(12, 13, 16, 0.92);
-  color: #e2e8f0;
-  border-radius: 0.75rem;
-  padding: 0.5rem 0.75rem;
+  border: 1px solid #4b4b4b;
+  background: #2c2c2c;
+  color: #e5e7eb;
+  border-radius: 0.7rem;
+  padding: 0.35rem 0.4rem;
   cursor: pointer;
   font-weight: 600;
+  display: grid;
+  gap: 0.15rem;
+  justify-items: center;
   transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  font-size: 0.85rem;
 }
 
 .tipo-pago__boton.activo {
-  border-color: rgba(250, 204, 21, 0.75);
-  background: linear-gradient(120deg, rgba(250, 204, 21, 0.18), rgba(250, 204, 21, 0.32));
-  color: #0b0d12;
-  box-shadow: 0 6px 18px rgba(250, 204, 21, 0.25);
+  border-color: #38bdf8;
+  background: #223241;
+  color: #e2f3ff;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.3);
   transform: translateY(-1px);
 }
 
 .tipo-pago__boton:focus-visible {
   outline: none;
-  border-color: rgba(250, 204, 21, 0.7);
+  border-color: #38bdf8;
+}
+
+.tipo-pago__key {
+  font-size: 0.65rem;
+  color: #cbd5e1;
 }
 
 .controles label {
@@ -1639,7 +1978,7 @@ const imprimirTicketResumen = () => {
 }
 
 .controles input {
-  border-radius: 0.75rem;
+  border-radius: 0.85rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
   padding: 0.6rem 0.8rem;
   background: rgba(12, 13, 16, 0.92);
@@ -1648,20 +1987,20 @@ const imprimirTicketResumen = () => {
 
 .totales {
   margin: 0;
-  padding: 0.6rem 0.75rem;
+  padding: 0.6rem 0.7rem;
   display: grid;
-  gap: 0.55rem;
-  border-radius: 0.9rem;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(12, 13, 16, 0.65);
+  gap: 0.4rem;
+  border-radius: 0.7rem;
+  border: 1px solid #3a3a3a;
+  background: #252525;
 }
 
 .totales div {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.35rem 0.1rem;
-  border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
+  padding: 0.25rem 0.1rem;
+  border-bottom: 1px solid #343434;
 }
 
 .totales dt,
@@ -1670,20 +2009,20 @@ const imprimirTicketResumen = () => {
 }
 
 .totales .total {
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   font-weight: 700;
-  color: #facc15;
+  color: #e5e7eb;
 }
 
 .totales .cambio {
-  color: #fef3c7;
+  color: #c7f9cc;
 }
 
 .ticket {
-  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border: 1px solid #3a3a3a;
   border-radius: 0.85rem;
   padding: 0.9rem;
-  background: rgba(12, 13, 16, 0.9);
+  background: #262626;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1697,7 +2036,7 @@ const imprimirTicketResumen = () => {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  border-bottom: 1px dashed rgba(148, 163, 184, 0.3);
+  border-bottom: 1px solid #343434;
   padding-bottom: 0.4rem;
 }
 
@@ -1713,14 +2052,14 @@ const imprimirTicketResumen = () => {
 }
 
 .ticket__acciones span {
-  color: #94a3b8;
+  color: #cbd5e1;
   font-size: 0.8rem;
 }
 
 .ticket__boton {
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(15, 18, 26, 0.9);
-  color: #e2e8f0;
+  border: 1px solid #4a4a4a;
+  background: #2b2b2b;
+  color: #e5e7eb;
   border-radius: 0.6rem;
   padding: 0.25rem 0.6rem;
   cursor: pointer;
@@ -1728,9 +2067,9 @@ const imprimirTicketResumen = () => {
 }
 
 .ticket__boton--secundario {
-  border-color: rgba(250, 204, 21, 0.55);
-  background: rgba(250, 204, 21, 0.14);
-  color: #f8fafc;
+  border-color: #4a4a4a;
+  background: #303030;
+  color: #e5e7eb;
 }
 
 .ticket__lineas {
@@ -1757,22 +2096,22 @@ const imprimirTicketResumen = () => {
 }
 
 .ticket__cantidad {
-  color: #cbd5e1;
+  color: #d1d5db;
 }
 
 .ticket__importe {
-  color: #facc15;
+  color: #e5e7eb;
 }
 
 .ticket__vacio {
   text-align: center;
-  color: #94a3b8;
+  color: #9ca3af;
 }
 
 .ticket__totales {
   display: grid;
   gap: 0.35rem;
-  border-top: 1px dashed rgba(148, 163, 184, 0.3);
+  border-top: 1px solid #343434;
   padding-top: 0.5rem;
 }
 
@@ -1783,13 +2122,13 @@ const imprimirTicketResumen = () => {
 }
 
 .ticket__total strong {
-  color: #facc15;
+  color: #e5e7eb;
 }
 
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(8, 10, 14, 0.7);
+  background: rgba(20, 20, 20, 0.75);
   display: grid;
   place-items: center;
   padding: 1rem;
@@ -1800,11 +2139,11 @@ const imprimirTicketResumen = () => {
   width: min(520px, 92vw);
   max-height: 85vh;
   overflow: auto;
-  background: #0b0d12;
-  border-radius: 1rem;
-  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: #2a2a2a;
+  border-radius: 1.2rem;
+  border: 1px solid #3c3c3c;
   padding: 1rem;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .modal__encabezado {
@@ -1821,8 +2160,34 @@ const imprimirTicketResumen = () => {
 
 .modal__subtitulo {
   margin: 0 0 0.75rem;
-  color: #94a3b8;
+  color: #cbd5e1;
   font-size: 0.9rem;
+}
+
+.cobro-input {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.cobro-input label {
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+.cobro-input input {
+  font-size: 1.4rem;
+  font-weight: 700;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.9rem;
+  border: 1px solid #4a4a4a;
+  background: #1f1f1f;
+  color: #e5e7eb;
+}
+
+.cobro-input__cambio {
+  color: #c7f9cc;
+  font-size: 1rem;
 }
 
 .modal__form {
@@ -1838,11 +2203,11 @@ const imprimirTicketResumen = () => {
 }
 
 .modal__form input {
-  border-radius: 0.75rem;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.85rem;
+  border: 1px solid #4a4a4a;
   padding: 0.6rem 0.8rem;
-  background: rgba(12, 13, 16, 0.92);
-  color: #e2e8f0;
+  background: #1f1f1f;
+  color: #e5e7eb;
 }
 
 .modal__acciones {
@@ -1852,24 +2217,24 @@ const imprimirTicketResumen = () => {
 }
 
 .modal__cerrar {
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(15, 18, 26, 0.9);
-  color: #e2e8f0;
-  border-radius: 0.6rem;
+  border: 1px solid #4a4a4a;
+  background: #2b2b2b;
+  color: #e5e7eb;
+  border-radius: 0.8rem;
   padding: 0.25rem 0.6rem;
   cursor: pointer;
 }
 
 .acciones-finales {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.6rem;
   padding-top: 0.25rem;
 }
 
 .acciones-finales__botones {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.6rem;
+  gap: 0.4rem;
 }
 
 .payload {
@@ -1889,26 +2254,29 @@ const imprimirTicketResumen = () => {
 }
 
 .boton {
-  border: none;
-  border-radius: 0.75rem;
-  padding: 0.6rem 1rem;
+  border: 1px solid #5a5a5a;
+  border-radius: 0.8rem;
+  padding: 0.5rem 0.75rem;
   font-weight: 700;
   cursor: pointer;
-  color: #0b0d12;
-  background: linear-gradient(120deg, #facc15, #fbbf24);
-  box-shadow: 0 12px 25px rgba(0, 0, 0, 0.35);
+  color: #e5e7eb;
+  background: #3b3b3b;
+  box-shadow: none;
 }
 
 .boton.secundaria {
-  background: rgba(120, 126, 137, 0.2);
-  color: #e2e8f0;
+  background: #2b2b2b;
+  color: #e5e7eb;
   box-shadow: none;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  border: 1px solid #4b4b4b;
 }
 
 .boton.primario {
-  min-width: 150px;
+  min-width: 120px;
   text-align: center;
+  background: #2e7d32;
+  border-color: #1b5e20;
+  color: #f0fdf4;
 }
 
 .botonera {
@@ -1935,14 +2303,24 @@ const imprimirTicketResumen = () => {
     grid-template-columns: 1fr;
   }
 
-  .cabecera {
-    flex-direction: column;
+  .pos-topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar__left,
+  .topbar__right {
+    justify-content: space-between;
   }
 
   .panel__encabezado--carrito {
     flex-direction: column;
     align-items: flex-start;
     gap: 0.6rem;
+  }
+
+  .tabla-header,
+  .linea__fila {
+    grid-template-columns: minmax(160px, 1fr) 90px 90px 90px;
   }
 
   .acciones-finales {

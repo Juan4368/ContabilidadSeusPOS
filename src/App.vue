@@ -11,9 +11,13 @@ import CarteraView from './views/CarteraView.vue'
 import LoginView from './views/LoginView.vue'
 import ResumenVentasView from './views/ResumenVentasView.vue'
 import PrestamoCajasView from './views/PrestamoCajasView.vue'
+import CierreCajaView from './views/CierreCajaView.vue'
+import MenuPrincipalView from './views/MenuPrincipalView.vue'
 import { ENDPOINTS } from './config/endpoints'
+import { getSessionUserId } from './utils/session'
 
 type VistaId =
+  | 'menu-principal'
   | 'pos'
   | 'contabilidad'
   | 'cartera'
@@ -23,14 +27,37 @@ type VistaId =
   | 'ventas-pendientes'
   | 'resumen-ventas'
   | 'prestamo-cajas'
+  | 'cierre-caja'
 
 const vistaActiva = ref<VistaId>('pos')
 const sesionIniciada = ref(false)
 const sesionUsuario = ref<string | null>(null)
 const sesionRoles = ref<string[]>([])
+const sesionCajaId = ref<number | null>(null)
+const sesionCajaNombre = ref<string | null>(null)
+const sesionCajaSesionId = ref<number | null>(null)
+const sesionToken = ref<string | null>(null)
 const loginError = ref('')
 const loginCargando = ref(false)
 const LOGIN_ENDPOINT = ENDPOINTS.LOGIN
+
+type Caja = {
+  id: number
+  nombre?: string
+  saldo_inicial?: number
+  estado?: string
+  usuario_id?: number | null
+  fecha_apertura?: string | null
+  fecha_cierre?: string | null
+  created_at?: string | null
+}
+
+const toUTCMinus5Iso = (date: Date) => new Date(date.getTime() - 5 * 60 * 60000).toISOString()
+
+const cajas = ref<Caja[]>([])
+const cargandoCajas = ref(false)
+const errorCajas = ref<string | null>(null)
+const actualizandoCaja = ref(false)
 
 const parseJwt = (token: string): Record<string, unknown> | null => {
   try {
@@ -45,6 +72,7 @@ const parseJwt = (token: string): Record<string, unknown> | null => {
 }
 
 const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componente: typeof POSView }> = [
+  { id: 'menu-principal', nombre: 'Menu principal', descripcion: 'Resumen de vistas', componente: MenuPrincipalView },
   { id: 'pos', nombre: 'POS', descripcion: 'Cobro en mostrador', componente: POSView },
   { id: 'contabilidad', nombre: 'Contabilidad', descripcion: 'Ingresos, egresos y cartera', componente: ContabilidadView },
   { id: 'cartera', nombre: 'Cartera', descripcion: 'Cuentas por cobrar', componente: CarteraView },
@@ -53,14 +81,25 @@ const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componen
   { id: 'productos', nombre: 'Productos', descripcion: 'Catalogo y precios', componente: ProductosView },
   { id: 'ventas-pendientes', nombre: 'Ventas pendientes', descripcion: 'Recuperar ventas', componente: VentasPendientesView },
   { id: 'resumen-ventas', nombre: 'Resumen ventas', descripcion: 'Resumen diario de ventas', componente: ResumenVentasView },
-  { id: 'prestamo-cajas', nombre: 'Prestamo cajas', descripcion: 'Control de cajas prestadas', componente: PrestamoCajasView }
+  { id: 'prestamo-cajas', nombre: 'Prestamo cajas', descripcion: 'Control de cajas prestadas', componente: PrestamoCajasView },
+  { id: 'cierre-caja', nombre: 'Cierre caja', descripcion: 'Resumen y cierre del turno', componente: CierreCajaView }
 ]
 
 const esCajero = computed(() => sesionRoles.value.map((rol) => rol.toLowerCase()).includes('cajero'))
+const tieneCajaSeleccionada = computed(() => Number.isFinite(sesionCajaId.value) && Number(sesionCajaId.value) > 0)
+const cajaAbiertaEnSesion = computed(() => Number.isFinite(sesionCajaId.value) && Number(sesionCajaId.value) > 0)
 
 const vistasDisponibles = computed(() => {
   if (!esCajero.value) return vistas
-  const permitidas: VistaId[] = ['pos', 'contabilidad', 'cartera', 'admin', 'prestamo-cajas']
+  const permitidas: VistaId[] = [
+    'menu-principal',
+    'pos',
+    'contabilidad',
+    'cartera',
+    'admin',
+    'prestamo-cajas',
+    'cierre-caja'
+  ]
   return vistas.filter((vista) => permitidas.includes(vista.id))
 })
 
@@ -68,16 +107,26 @@ const componenteActual = computed(
   () => vistasDisponibles.value.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView
 )
 
+const vistasMenuPrincipal = computed(() => vistasDisponibles.value.filter((vista) => vista.id !== 'menu-principal'))
+
 watch(vistasDisponibles, (nuevas) => {
   if (!nuevas.find((vista) => vista.id === vistaActiva.value)) {
     vistaActiva.value = nuevas[0]?.id ?? 'pos'
   }
 })
 
+watch(sesionIniciada, (iniciada) => {
+  if (iniciada) {
+    void cargarCajas()
+  } else {
+    cajas.value = []
+  }
+})
+
 const cambiarVista = (event: Event) => {
   const detalle = (event as CustomEvent<{ vista: VistaId }>).detail
   if (detalle?.vista) {
-    vistaActiva.value = detalle.vista
+    seleccionarVista(detalle.vista)
   }
 }
 
@@ -88,6 +137,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('app:cambiar-vista', cambiarVista as EventListener)
 })
+
+const seleccionarVista = (vista: VistaId) => {
+  if (vista === 'pos' && !tieneCajaSeleccionada.value) return
+  vistaActiva.value = vista
+}
 
 const iniciarSesion = async (credenciales: { usuario: string; contrasena: string }) => {
   loginError.value = ''
@@ -133,10 +187,20 @@ const iniciarSesion = async (credenciales: { usuario: string; contrasena: string
     const roles = Array.isArray(payload?.roles) ? (payload?.roles as string[]) : []
     sesionUsuario.value = String(payload?.username ?? data.username ?? credenciales.usuario)
     sesionRoles.value = roles
+    sesionToken.value = token
     sesionIniciada.value = true
+    sesionCajaId.value = null
+    sesionCajaNombre.value = null
     localStorage.setItem(
       'pos_sesion',
-      JSON.stringify({ usuario: sesionUsuario.value, roles, token })
+      JSON.stringify({
+        usuario: sesionUsuario.value,
+        roles,
+        token,
+        cajaId: sesionCajaId.value,
+        cajaNombre: sesionCajaNombre.value,
+        cajaSesionId: sesionCajaSesionId.value
+      })
     )
     window.dispatchEvent(new Event('pos:sesion-actualizada'))
   } catch (error) {
@@ -147,10 +211,58 @@ const iniciarSesion = async (credenciales: { usuario: string; contrasena: string
   }
 }
 
-const cerrarSesion = () => {
+const cerrarCajaSesion = async () => {
+  if (!sesionCajaId.value) return
+  try {
+    if (sesionCajaSesionId.value) {
+      const fechaCierre = toUTCMinus5Iso(new Date())
+      const cerrarSesionResp = await fetch(`${ENDPOINTS.CONTABILIDAD_CAJA_SESIONES}${sesionCajaSesionId.value}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fecha_cierre: fechaCierre
+        })
+      })
+      if (!cerrarSesionResp.ok) {
+        const detalle = await cerrarSesionResp.text().catch(() => '')
+        throw new Error(detalle || `Error ${cerrarSesionResp.status}`)
+      }
+    }
+    const detalleResp = await fetch(`${ENDPOINTS.CONTABILIDAD_CAJAS}${sesionCajaId.value}`)
+    if (!detalleResp.ok) {
+      const detalle = await detalleResp.text().catch(() => '')
+      throw new Error(detalle || `Error ${detalleResp.status}`)
+    }
+    const data = (await detalleResp.json()) as Record<string, unknown>
+    const nombre = String(data.nombre ?? data.name ?? sesionCajaId.value)
+    const saldoInicial = Number(data.saldo_inicial ?? data.saldoInicial ?? 0)
+    const cerrarResp = await fetch(`${ENDPOINTS.CONTABILIDAD_CAJAS}${sesionCajaId.value}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nombre,
+        saldo_inicial: Number.isFinite(saldoInicial) ? saldoInicial : 0,
+        estado: 'CERRADA'
+      })
+    })
+    if (!cerrarResp.ok) {
+      const detalle = await cerrarResp.text().catch(() => '')
+      throw new Error(detalle || `Error ${cerrarResp.status}`)
+    }
+  } catch (err) {
+    console.warn('No se pudo cerrar la caja en logout', err)
+  }
+}
+
+const cerrarSesion = async () => {
+  await cerrarCajaSesion()
   sesionIniciada.value = false
   sesionUsuario.value = null
   sesionRoles.value = []
+  sesionCajaId.value = null
+  sesionCajaNombre.value = null
+  sesionCajaSesionId.value = null
+  sesionToken.value = null
   loginError.value = ''
   localStorage.removeItem('pos_sesion')
   window.dispatchEvent(new Event('pos:sesion-actualizada'))
@@ -160,14 +272,169 @@ const hidratarSesion = () => {
   try {
     const raw = localStorage.getItem('pos_sesion')
     if (!raw) return
-    const data = JSON.parse(raw) as { usuario?: string; roles?: string[] }
+    const data = JSON.parse(raw) as {
+      usuario?: string
+      roles?: string[]
+      token?: string | null
+      cajaId?: number | null
+      cajaNombre?: string | null
+      cajaSesionId?: number | null
+    }
     if (data?.usuario) {
       sesionUsuario.value = data.usuario
       sesionRoles.value = Array.isArray(data.roles) ? data.roles : []
+      sesionCajaId.value = Number.isFinite(data.cajaId) ? Number(data.cajaId) : null
+      sesionCajaNombre.value = data.cajaNombre ? String(data.cajaNombre) : null
+      sesionCajaSesionId.value = Number.isFinite(data.cajaSesionId) ? Number(data.cajaSesionId) : null
+      sesionToken.value = data.token ? String(data.token) : null
       sesionIniciada.value = true
     }
   } catch {
     localStorage.removeItem('pos_sesion')
+  }
+}
+
+const persistirSesion = () => {
+  if (!sesionUsuario.value) return
+  localStorage.setItem(
+    'pos_sesion',
+    JSON.stringify({
+      usuario: sesionUsuario.value,
+      roles: sesionRoles.value,
+      token: sesionToken.value,
+      cajaId: sesionCajaId.value,
+      cajaNombre: sesionCajaNombre.value,
+      cajaSesionId: sesionCajaSesionId.value
+    })
+  )
+}
+
+const cargarCajas = async () => {
+  if (!sesionIniciada.value) return
+  cargandoCajas.value = true
+  errorCajas.value = null
+  try {
+    const respuesta = await fetch(ENDPOINTS.CONTABILIDAD_CAJAS)
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = await respuesta.json()
+    const lista = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
+    cajas.value = (lista as Array<Record<string, unknown>>)
+      .map((item) => ({
+        id: Number(item?.id ?? item?.caja_id ?? item?.pk ?? 0),
+        nombre: String(item?.nombre ?? item?.name ?? `Caja ${item?.id ?? item?.caja_id ?? item?.pk ?? ''}`),
+        saldo_inicial: Number(item?.saldo_inicial ?? item?.saldoInicial ?? 0),
+        estado: String(item?.estado ?? '').toUpperCase(),
+        usuario_id: Number.isFinite(Number(item?.usuario_id)) ? Number(item?.usuario_id) : null,
+        fecha_apertura: item?.fecha_apertura ? String(item?.fecha_apertura) : null,
+        fecha_cierre: item?.fecha_cierre ? String(item?.fecha_cierre) : null,
+        created_at: item?.created_at ? String(item?.created_at) : null
+      }))
+      .filter((item) => Number.isFinite(item.id) && item.id > 0)
+  } catch (err) {
+    console.error('No se pudieron cargar cajas', err)
+    errorCajas.value = 'No fue posible cargar las cajas.'
+  } finally {
+    cargandoCajas.value = false
+  }
+}
+
+const seleccionarCaja = async (caja: Caja) => {
+  if (!caja) return
+  if (actualizandoCaja.value) return
+  actualizandoCaja.value = true
+  errorCajas.value = null
+  try {
+    if (caja.estado === 'ABIERTA') {
+      if (sesionCajaId.value !== caja.id || !sesionCajaSesionId.value) {
+        throw new Error('Solo puedes cerrar la caja activa de esta sesión.')
+      }
+      const fechaCierre = toUTCMinus5Iso(new Date())
+      const cerrarSesionResp = await fetch(`${ENDPOINTS.CONTABILIDAD_CAJA_SESIONES}${sesionCajaSesionId.value}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fecha_cierre: fechaCierre })
+      })
+      if (!cerrarSesionResp.ok) {
+        const detalle = await cerrarSesionResp.text().catch(() => '')
+        throw new Error(detalle || `Error ${cerrarSesionResp.status}`)
+      }
+      const cerrarCajaResp = await fetch(`${ENDPOINTS.CONTABILIDAD_CAJAS}${caja.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nombre: caja.nombre ?? String(caja.id),
+          saldo_inicial: Number.isFinite(caja.saldo_inicial) ? caja.saldo_inicial : 0,
+          estado: 'CERRADA'
+        })
+      })
+      if (!cerrarCajaResp.ok) {
+        const detalle = await cerrarCajaResp.text().catch(() => '')
+        throw new Error(detalle || `Error ${cerrarCajaResp.status}`)
+      }
+      sesionCajaId.value = null
+      sesionCajaNombre.value = null
+      sesionCajaSesionId.value = null
+      cajas.value = cajas.value.map((item) =>
+        item.id === caja.id ? { ...item, estado: 'CERRADA' } : item
+      )
+      persistirSesion()
+      return
+    }
+
+    if (cajaAbiertaEnSesion.value && sesionCajaId.value && sesionCajaId.value !== caja.id) {
+      throw new Error('Solo puedes abrir una caja por sesión. Cierra la caja activa primero.')
+    }
+
+    const usuarioId = getSessionUserId()
+    if (!usuarioId) {
+      throw new Error('No se pudo identificar el usuario.')
+    }
+    const ahoraIso = toUTCMinus5Iso(new Date())
+    const sesionResp = await fetch(ENDPOINTS.CONTABILIDAD_CAJA_SESIONES, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        caja_id: caja.id,
+        usuario_id: usuarioId,
+        fecha_apertura: ahoraIso,
+        fecha_cierre: null
+      })
+    })
+    if (!sesionResp.ok) {
+      const detalle = await sesionResp.text().catch(() => '')
+      throw new Error(detalle || `Error ${sesionResp.status}`)
+    }
+    const sesionData = (await sesionResp.json().catch(() => ({}))) as Record<string, unknown>
+    const sesionIdRaw = (sesionData.data as Record<string, unknown> | undefined)?.id ?? sesionData.id
+    sesionCajaSesionId.value = Number.isFinite(Number(sesionIdRaw)) ? Number(sesionIdRaw) : null
+    const respuesta = await fetch(`${ENDPOINTS.CONTABILIDAD_CAJAS}${caja.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nombre: caja.nombre ?? String(caja.id),
+        saldo_inicial: Number.isFinite(caja.saldo_inicial) ? caja.saldo_inicial : 0,
+        estado: 'ABIERTA'
+      })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    sesionCajaId.value = caja.id
+    sesionCajaNombre.value = caja.nombre ?? `Caja ${caja.id}`
+    cajas.value = cajas.value.map((item) =>
+      item.id === caja.id ? { ...item, estado: 'ABIERTA' } : item
+    )
+    persistirSesion()
+  } catch (err) {
+    console.error('No se pudo abrir la caja', err)
+    const detalle = err instanceof Error ? err.message : String(err)
+    errorCajas.value = `No fue posible abrir la caja. ${detalle}`
+  } finally {
+    actualizandoCaja.value = false
   }
 }
 
@@ -191,22 +458,63 @@ hidratarSesion()
             :key="vista.id"
             type="button"
             :class="['selector__boton', { activa: vista.id === vistaActiva }]"
-            @click="vistaActiva = vista.id"
+            :disabled="vista.id === 'pos' && !tieneCajaSeleccionada"
+            @click="seleccionarVista(vista.id)"
           >
             <span class="selector__nombre">{{ vista.nombre }}</span>
             <small class="selector__descripcion">{{ vista.descripcion }}</small>
           </button>
+        </div>
+        <div class="selector__cajas">
+          <span class="selector__cajas-label">Cajas</span>
+          <div class="selector__cajas-lista">
+            <button v-if="cargandoCajas" type="button" class="selector__caja" disabled>
+              Cargando...
+            </button>
+            <button v-else-if="!cajas.length" type="button" class="selector__caja" disabled>
+              Sin cajas
+            </button>
+            <button
+              v-for="caja in cajas"
+              v-else
+              :key="caja.id"
+              type="button"
+              :class="[
+                'selector__caja',
+                { activa: sesionCajaId === caja.id, bloqueada: caja.estado === 'ABIERTA' }
+              ]"
+              :disabled="actualizandoCaja || (cajaAbiertaEnSesion && sesionCajaId !== caja.id && caja.estado !== 'ABIERTA')"
+              @click="seleccionarCaja(caja)"
+            >
+              <span>{{ caja.nombre ?? `Caja ${caja.id}` }}</span>
+              <small v-if="caja.estado === 'ABIERTA'">ABIERTA</small>
+            </button>
+          </div>
+          <small v-if="errorCajas" class="selector__cajas-error">{{ errorCajas }}</small>
         </div>
         <div class="selector__sesion">
           <button type="button" class="selector__sesion-boton">
             Sesión: {{ sesionUsuario ?? 'Usuario' }}
             <span v-if="sesionRoles.length" class="selector__sesion-rol">· {{ sesionRoles.join(', ') }}</span>
           </button>
+          <span v-if="sesionCajaId" class="selector__sesion-caja">
+            {{ sesionCajaNombre ?? `Caja ${sesionCajaId}` }}
+          </span>
           <button type="button" class="selector__sesion-cerrar" @click="cerrarSesion">Cerrar sesión</button>
         </div>
       </header>
 
-      <component :is="componenteActual" />
+      <section v-if="vistaActiva === 'pos' && !tieneCajaSeleccionada" class="selector__bloqueo">
+        Selecciona una caja en el header para habilitar la vista POS.
+      </section>
+      <MenuPrincipalView
+        v-else-if="vistaActiva === 'menu-principal'"
+        :vistas="vistasMenuPrincipal"
+        :vista-activa="vistaActiva"
+        :pos-bloqueado="!tieneCajaSeleccionada"
+        @seleccionar="seleccionarVista"
+      />
+      <component v-else :is="componenteActual" />
     </template>
   </main>
 </template>
@@ -237,6 +545,66 @@ hidratarSesion()
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.selector__cajas {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.selector__cajas-label {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.selector__cajas-lista {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.selector__caja {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(120, 126, 137, 0.14);
+  color: #e2e8f0;
+  border-radius: 0.65rem;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.selector__caja small {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.3rem;
+  border-radius: 999px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.selector__caja.activa {
+  border-color: rgba(250, 204, 21, 0.7);
+  background: rgba(250, 204, 21, 0.12);
+}
+
+.selector__caja.bloqueada {
+  border-style: dashed;
+  color: #94a3b8;
+}
+
+.selector__caja:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.selector__cajas-error {
+  color: #f87171;
+  font-size: 0.85rem;
 }
 
 .selector__sesion {
@@ -272,6 +640,15 @@ hidratarSesion()
   cursor: pointer;
 }
 
+.selector__sesion-caja {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.8rem;
+  font-weight: 600;
+}
+
 .selector__boton {
   background: rgba(120, 126, 137, 0.14);
   border: 1px solid rgba(148, 163, 184, 0.28);
@@ -291,6 +668,12 @@ hidratarSesion()
   border-color: rgba(250, 204, 21, 0.55);
 }
 
+.selector__boton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .selector__boton.activa {
   background: linear-gradient(130deg, rgba(250, 204, 21, 0.16), rgba(255, 255, 255, 0.06));
   border-color: rgba(250, 204, 21, 0.7);
@@ -304,6 +687,15 @@ hidratarSesion()
 .selector__descripcion {
   display: block;
   color: #cbd5e1;
+}
+
+.selector__bloqueo {
+  border: 1px dashed rgba(250, 204, 21, 0.5);
+  background: rgba(250, 204, 21, 0.08);
+  color: #fde68a;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  font-weight: 600;
 }
 
 @media (max-width: 768px) {

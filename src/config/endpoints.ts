@@ -40,6 +40,10 @@ export const ENDPOINTS = {
   CONTABILIDAD_EGRESOS_LIST: join(BASE_REQUIRED.POS, '/contabilidad/egresos/?desde=2026-01-20&hasta=2026-01-23'),
   CONTABILIDAD_EGRESOS_CREATE: join(BASE_REQUIRED.POS, '/contabilidad/egresos/'),
   CONTABILIDAD_CUENTAS: join(BASE_REQUIRED.POS, '/contabilidad/cuentas-por-cobrar/'),
+  CONTABILIDAD_CAJAS: join(BASE_REQUIRED.LOCAL, '/contabilidad/cajas/'),
+  CONTABILIDAD_CAJA_SESIONES: join(BASE_REQUIRED.LOCAL, '/contabilidad/caja-sesiones/'),
+  CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES: join(BASE_REQUIRED.LOCAL, '/contabilidad/cierre-caja-denominaciones/'),
+  CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES_BULK: join(BASE_REQUIRED.LOCAL, '/contabilidad/cierre-caja-denominaciones/bulk'),
   VENTAS_RESUMEN: join(BASE_REQUIRED.LOCAL, '/ventas/resumen'),
   PRESTAMO_CAJAS: join(BASE_REQUIRED.LOCAL, '/cajas-cerveza/')
 } as const

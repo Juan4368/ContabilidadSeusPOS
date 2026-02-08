@@ -75,15 +75,15 @@ const cargarPrestamos = async () => {
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = (await respuesta.json()) as unknown
-    const lista = Array.isArray(data)
+    const lista = (Array.isArray(data)
       ? data
       : Array.isArray((data as Record<string, unknown>)?.results)
         ? (data as Record<string, unknown>).results
         : Array.isArray((data as Record<string, unknown>)?.data)
           ? (data as Record<string, unknown>).data
-          : []
+          : []) as unknown[]
     prestamos.value = lista
-      .map((item) => {
+      .map((item: unknown) => {
         if (!item || typeof item !== 'object') return null
         const raw = item as Record<string, unknown>
         return {

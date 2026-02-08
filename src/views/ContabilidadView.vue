@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { crearMovimientoFinanciero, type MovimientoFinancieroPayload } from '../services/movimientosFinancieros'
@@ -54,6 +53,7 @@ const formularioMovimiento = ref<MovimientoFinancieroPayload>({
   fecha: toDateTimeLocal(new Date()),
   tipo: 'EGRESO',
   monto: 0,
+  concepto: '',
   nota: '',
   proveedor_id: 0,
   caja_id: 1,
@@ -133,6 +133,7 @@ const cerrarFormularioMovimiento = () => {
     fecha: toDateTimeLocal(new Date()),
     tipo: 'EGRESO',
     monto: 0,
+    concepto: '',
     nota: '',
     proveedor_id: 0,
     caja_id: 1,
@@ -399,6 +400,10 @@ onMounted(() => {
               @input="actualizarMontoMovimiento"
               required
             />
+          </label>
+          <label>
+            <span>Concepto</span>
+            <input v-model="formularioMovimiento.concepto" type="text" placeholder="Concepto" />
           </label>
           <label>
             <span>Nota</span>

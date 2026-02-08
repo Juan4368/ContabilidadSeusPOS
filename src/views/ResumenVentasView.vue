@@ -110,15 +110,15 @@ const cargarResumen = async () => {
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = (await respuesta.json()) as unknown
-    const lista = Array.isArray(data)
+    const lista = (Array.isArray(data)
       ? data
       : Array.isArray((data as Record<string, unknown>)?.results)
         ? (data as Record<string, unknown>).results
         : Array.isArray((data as Record<string, unknown>)?.data)
           ? (data as Record<string, unknown>).data
-          : []
+          : []) as unknown[]
     resumenes.value = lista
-      .map((item) => {
+      .map((item: unknown) => {
         if (!item || typeof item !== 'object') return null
         const raw = item as Record<string, unknown>
         return {
@@ -259,21 +259,22 @@ const cargarDetalle = async (item: ResumenVenta) => {
     if (!venta) {
       throw new Error('No se encontraron detalles de la venta.')
     }
+    const ventaId = Number(venta.venta_id ?? venta.id ?? 0) || 0
     const detalle = extraerDetalle(venta)
     // Fallback: algunos endpoints devuelven solo cabecera y los detalles en otra ruta
     if (!detalle.detalles.length && ventaId) {
       const respuestaDetalle = await fetch(`${ENDPOINTS.VENTAS_LOCAL}${ventaId}/detalles`)
       if (respuestaDetalle.ok) {
         const dataDetalle = (await respuestaDetalle.json()) as unknown
-        const listaDetalle = Array.isArray(dataDetalle)
+        const listaDetalle = (Array.isArray(dataDetalle)
           ? dataDetalle
           : Array.isArray((dataDetalle as Record<string, unknown>)?.results)
             ? (dataDetalle as Record<string, unknown>).results
             : Array.isArray((dataDetalle as Record<string, unknown>)?.data)
               ? (dataDetalle as Record<string, unknown>).data
-              : []
+              : []) as unknown[]
         detalle.detalles = listaDetalle
-          .map((item) => {
+          .map((item: unknown) => {
             if (!item || typeof item !== 'object') return null
             const raw = item as Record<string, unknown>
             return {

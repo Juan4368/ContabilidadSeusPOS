@@ -1,7 +1,9 @@
 {
-  "name": "contabilidad-autoservicio---template-vue-ts",
+  "name": "seuspos",
   "private": true,
   "version": "0.0.0",
+  "description": "SeusPOS - Sistema de punto de venta y contabilidad.",
+  "author": "SeusPOS",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,4 +25,19 @@
     "vue-tsc": "^2.0.26"
   },
   "main": "dist-electron/main.js"
+  ,
+  "build": {
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "appId": "com.seuspos.app",
+    "productName": "SeusPOS",
+    "executableName": "SeusPOS",
+    "win": {
+      "icon": "seuspos.png",
+      "artifactName": "SeusPOS-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
+    }
+  }
 }

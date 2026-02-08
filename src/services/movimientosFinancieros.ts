@@ -4,6 +4,7 @@ export type MovimientoFinancieroPayload = {
   fecha: string
   tipo: 'INGRESO' | 'EGRESO'
   monto: number
+  concepto?: string
   nota?: string
   categoria_contabilidad_id?: number
   proveedor_id: number
