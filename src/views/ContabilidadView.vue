@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import { crearMovimientoFinanciero, type MovimientoFinancieroPayload } from '../services/movimientosFinancieros'
 import { ENDPOINTS } from '../config/endpoints'
+import { getSessionUserId } from '../utils/session'
 
 const resumen = [
   { titulo: 'Ingresos', valor: '$ 0', detalle: 'Mes actual', estado: 'estable' },
@@ -57,7 +58,7 @@ const formularioMovimiento = ref<MovimientoFinancieroPayload>({
   nota: '',
   proveedor_id: 0,
   caja_id: 1,
-  usuario_id: 8,
+  usuario_id: getSessionUserId() ?? 0,
   venta_id: null
 })
 
@@ -91,6 +92,12 @@ const registrarMovimiento = async () => {
   errorMovimiento.value = null
   mensaje.value = null
   mensajeTipo.value = null
+  const usuarioSesion = getSessionUserId()
+  if (!usuarioSesion) {
+    errorMovimiento.value = 'No se pudo identificar el usuario de la sesion.'
+    guardandoMovimiento.value = false
+    return
+  }
   if (formularioMovimiento.value.monto <= 0) {
     errorMovimiento.value = 'El monto debe ser mayor a cero.'
     guardandoMovimiento.value = false
@@ -109,12 +116,18 @@ const registrarMovimiento = async () => {
   const payload: MovimientoFinancieroPayload = {
     ...formularioMovimiento.value,
     fecha: fechaIso,
+    usuario_id: usuarioSesion,
     venta_id: ventaId && ventaId > 0 ? ventaId : null
   }
   try {
-    await crearMovimientoFinanciero(payload)
-    mensaje.value = 'Movimiento guardado correctamente.'
-    mensajeTipo.value = 'exito'
+    const respuesta = await crearMovimientoFinanciero(payload)
+    if ((respuesta as { offline?: boolean } | undefined)?.offline) {
+      mensaje.value = 'Movimiento guardado (pendiente de sincronizar).'
+      mensajeTipo.value = 'exito'
+    } else {
+      mensaje.value = 'Movimiento guardado correctamente.'
+      mensajeTipo.value = 'exito'
+    }
   } catch (err) {
     console.error('Error al registrar movimiento', err)
     const detalle = err instanceof Error ? err.message : String(err)
@@ -137,7 +150,7 @@ const cerrarFormularioMovimiento = () => {
     nota: '',
     proveedor_id: 0,
     caja_id: 1,
-    usuario_id: 8,
+    usuario_id: getSessionUserId() ?? 0,
     venta_id: null
   }
   errorMovimiento.value = null
@@ -236,6 +249,7 @@ const abrirFormularioMovimiento = () => {
   mensajeTipo.value = null
   mostrarFormularioMovimiento.value = true
   cargarProveedores()
+  cargarCategoriasContables()
   formularioMovimiento.value = {
     fecha: toDateTimeLocal(new Date()),
     tipo: 'EGRESO',
@@ -244,7 +258,7 @@ const abrirFormularioMovimiento = () => {
     nota: '',
     proveedor_id: 0,
     caja_id: 1,
-    usuario_id: 8,
+    usuario_id: getSessionUserId() ?? 0,
     venta_id: null
   }
   errorMovimiento.value = null
@@ -332,6 +346,7 @@ const cerrarFormularioCategoria = () => {
 
 onMounted(() => {
   cargarProveedores()
+  cargarCategoriasContables()
 })
 </script>
 
@@ -371,6 +386,8 @@ onMounted(() => {
       class="modal"
       role="dialog"
       aria-modal="true"
+      tabindex="0"
+      @keydown.esc.prevent="cerrarFormularioMovimiento"
       @click.self="cerrarFormularioMovimiento"
     >
       <section class="contabilidad__formulario" @click.stop>
@@ -403,7 +420,27 @@ onMounted(() => {
           </label>
           <label>
             <span>Concepto</span>
-            <input v-model="formularioMovimiento.concepto" type="text" placeholder="Concepto" />
+            <select
+              v-if="categoriasContables.length > 0"
+              v-model="formularioMovimiento.concepto"
+              :disabled="cargandoCategorias"
+            >
+              <option value="" disabled>Selecciona una categoria</option>
+              <option v-for="categoria in categoriasContables" :key="categoria.id" :value="categoria.nombre">
+                {{ categoria.nombre }}
+              </option>
+            </select>
+            <input
+              v-else
+              v-model="formularioMovimiento.concepto"
+              type="text"
+              placeholder="Concepto"
+              :disabled="cargandoCategorias"
+            />
+            <small v-if="cargandoCategorias" class="ayuda">Cargando categorias...</small>
+            <small v-else-if="categoriasContables.length === 0" class="ayuda ayuda--error">
+              {{ errorCategorias ?? 'No hay categorias disponibles.' }}
+            </small>
           </label>
           <label>
             <span>Nota</span>

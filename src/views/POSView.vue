@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import jsPDF from 'jspdf'
 import { crearMovimientoFinanciero } from '../services/movimientosFinancieros'
 import { ENDPOINTS } from '../config/endpoints'
-import { getSessionUserId } from '../utils/session'
+import { getSessionUserId, getSessionUserName } from '../utils/session'
 
 type Producto = {
   id: number
@@ -42,6 +42,18 @@ const VENTAS_ENDPOINT = ENDPOINTS.VENTAS_POS
 const DEFAULT_PROVEEDOR_ID = 0
 const DEFAULT_CAJA_ID = 1
 
+const getSessionCajaNombre = () => {
+  try {
+    const raw = localStorage.getItem('pos_sesion')
+    if (!raw) return null
+    const data = JSON.parse(raw) as { cajaNombre?: string | null; cajaId?: number | null }
+    if (data?.cajaNombre) return String(data.cajaNombre)
+    if (data?.cajaId) return `Caja ${data.cajaId}`
+    return null
+  } catch {
+    return null
+  }
+}
 
 const productos = ref<Producto[]>([
   { id: 1, nombre: 'Café americano', precio: 2.5, stock: 18, categoria: 'Bebidas', destacador: 'Caliente' },
@@ -210,16 +222,16 @@ const manejarAtajos = (event: KeyboardEvent) => {
     tipoPago.value = 'transferencia'
   } else if (event.key === 'F4') {
     event.preventDefault()
-    tipoPago.value = 'credito'
+    focusUltimaCantidad()
   } else if (event.key === 'F5') {
     event.preventDefault()
     tipoPago.value = 'tarjeta'
   } else if (event.key === 'F6') {
     event.preventDefault()
-    focusUltimaCantidad()
+    tipoPago.value = 'credito'
   } else if (event.key === 'F9') {
     event.preventDefault()
-    mostrarTicketModal.value = true
+    guardarVentaPendiente()
   } else if (event.key === 'Escape') {
     if (mostrarTicketModal.value) {
       event.preventDefault()
@@ -529,6 +541,14 @@ const resumenCarrito = computed(() => {
   }
 })
 
+watch(
+  () => resumenCarrito.value.total,
+  (total) => {
+    window.dispatchEvent(new CustomEvent('pos:total-actualizado', { detail: { total } }))
+  },
+  { immediate: true }
+)
+
 const subtotalDetalle = computed(() => resumenCarrito.value.subtotalBruto)
 
 const formatCurrency = (monto: number) =>
@@ -646,11 +666,6 @@ const limpiarCarrito = () => {
   ultimaAccion.value = 'Carrito limpio'
 }
 
-const cobrarRapido = () => {
-  pagoRecibido.value = resumenCarrito.value.total
-  ultimaAccion.value = 'Pago igual al total'
-}
-
 const construirPayloadVenta = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
   const tipoPagoPayload = tipoPago.value === 'credito' ? null : tipoPago.value
@@ -682,19 +697,27 @@ const construirPayloadActualizacion = (estadoOverride?: boolean) => {
   const clientePayload = clienteId.value ?? 'e7098aa3-ea98-4a42-a019-2bf75a16a1ea'
   const usuarioPayload = getSessionUserId()
   if (!usuarioPayload) {
-    throw new Error('No se pudo identificar el usuario de la sesión.')
+    throw new Error('No se pudo identificar el usuario de la sesion.')
   }
+  const tipoPagoPayload = tipoPago.value === 'credito' ? 'credito' : tipoPago.value
+  const esCredito = tipoPago.value === 'credito'
+  const numeroFacturaPayload = numeroFacturaResumen.value?.trim() || null
   return {
-    estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
-    nota_venta: notaRapida.value || null,
+    fecha: new Date().toISOString(),
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
+    tipo_pago: tipoPagoPayload,
+    es_credito: esCredito,
+    estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
+    nota_venta: notaRapida.value || null,
+    numero_factura: numeroFacturaPayload,
     cliente_id: clientePayload,
     user_id: usuarioPayload,
     detalles: carrito.value.map((item) => ({
       producto_id: item.backendId ?? item.id,
       cantidad: item.cantidad,
-      precio_unitario: redondear2(item.precio)
+      precio_unitario: redondear2(item.precio),
+      subtotal: redondear2(calcularLinea(item).base)
     }))
   }
 }
@@ -702,7 +725,7 @@ const construirPayloadActualizacion = (estadoOverride?: boolean) => {
 const guardarVentaApi = async (estadoOverride?: boolean) => {
   const payload = construirPayloadVenta(estadoOverride)
   payloadVenta.value = payload
-  mostrarPayloadVenta.value = true
+  mostrarPayloadVenta.value = false
 
   const respuesta = await fetch(VENTAS_ENDPOINT, {
     method: 'POST',
@@ -714,7 +737,18 @@ const guardarVentaApi = async (estadoOverride?: boolean) => {
     const detalle = await respuesta.text().catch(() => '')
     throw new Error(detalle || `Error ${respuesta.status}`)
   }
-  const contenido = await respuesta.json().catch(() => null)
+  const contenido = await respuesta.json().catch(() => ({}))
+  if ((contenido as { offline?: boolean }).offline) {
+    const localId = ventaId.value
+    const offlineResp = {
+      venta_id: localId,
+      id: localId,
+      numero_factura: `POS-${localId}`,
+      offline: true
+    }
+    respuestaVenta.value = offlineResp
+    return offlineResp
+  }
   respuestaVenta.value = contenido
   return contenido
 }
@@ -742,7 +776,7 @@ const registrarMovimientoIngreso = async (ventaId?: number | null) => {
 const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
   const payload = construirPayloadActualizacion(estadoOverride)
   payloadVenta.value = payload
-  mostrarPayloadVenta.value = true
+  mostrarPayloadVenta.value = false
 
   const respuesta = await fetch(`${VENTAS_ENDPOINT}${id}`, {
     method: 'PUT',
@@ -754,7 +788,17 @@ const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
     const detalle = await respuesta.text().catch(() => '')
     throw new Error(detalle || `Error ${respuesta.status}`)
   }
-  const contenido = await respuesta.json().catch(() => null)
+  const contenido = await respuesta.json().catch(() => ({}))
+  if ((contenido as { offline?: boolean }).offline) {
+    const offlineResp = {
+      venta_id: id,
+      id,
+      numero_factura: numeroFacturaResumen.value?.trim() || `POS-${id}`,
+      offline: true
+    }
+    respuestaVenta.value = offlineResp
+    return offlineResp
+  }
   respuestaVenta.value = contenido
   return contenido
 }
@@ -787,18 +831,18 @@ const cerrarVenta = async () => {
     const ventaIdFinal = idRaw !== null && idRaw !== undefined ? Number(idRaw) : NaN
     try {
       await registrarMovimientoIngreso(Number.isFinite(ventaIdFinal) ? ventaIdFinal : null)
-      ultimaAccion.value = 'Movimiento financiero registrado'
+      ultimaAccion.value = 'Venta registrada y movimiento financiero guardado.'
     } catch (error) {
       const detalle = error instanceof Error ? error.message : String(error)
       console.error('No se pudo registrar el movimiento financiero', error)
-      ultimaAccion.value = detalle
+      ultimaAccion.value = `Venta registrada, pero fallo el movimiento financiero: ${detalle}`
     }
     limpiarCarrito()
     notaRapida.value = ''
     ventaId.value = Date.now()
     fechaVenta.value = new Date().toISOString()
     estadoVenta.value = true
-    ultimaAccion.value = 'Venta registrada'
+    ultimaAccion.value = `Venta registrada. Total: ${formatCurrency(resumenCobro.value.total)}`
     resumenCobro.value = snapshot
     pagoRecibidoModalInput.value = formatCurrency(snapshot.pagoRecibido || snapshot.total)
     reciboItems.value = snapshotItems
@@ -806,7 +850,7 @@ const cerrarVenta = async () => {
   } catch (error) {
     const mensaje = error instanceof Error ? error.message : 'Error al guardar la venta'
     console.error('No se pudo guardar la venta', error)
-    ultimaAccion.value = mensaje
+    ultimaAccion.value = `No se pudo guardar la venta: ${mensaje}`
   }
 }
 
@@ -829,11 +873,11 @@ const guardarVentaPendiente = () => {
       window.dispatchEvent(new CustomEvent('pos:pendientes-actualizados'))
       limpiarCarrito()
       ventaPendienteId.value = null
-      ultimaAccion.value = 'Venta guardada como pendiente'
+      ultimaAccion.value = `Venta guardada como pendiente. Total: ${formatCurrency(resumenCarrito.value.total)}`
     } catch (error) {
       const mensaje = error instanceof Error ? error.message : 'Error al guardar la venta'
       console.error('No se pudo guardar la venta', error)
-      ultimaAccion.value = mensaje
+      ultimaAccion.value = `No se pudo guardar la venta: ${mensaje}`
     }
   }
 
@@ -842,6 +886,14 @@ const guardarVentaPendiente = () => {
 
 const imprimirTicket = () => {
   window.print()
+}
+
+const formatoTipoPago = (tipo: string) => {
+  const normalizado = (tipo || '').toLowerCase()
+  if (normalizado === 'credito') return 'Credito'
+  if (normalizado === 'transferencia') return 'Transferencia'
+  if (normalizado === 'tarjeta') return 'Tarjeta'
+  return 'Efectivo'
 }
 
 const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.value, numeroFactura?: string) => {
@@ -871,7 +923,13 @@ const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.val
   const clienteNombre = clienteSeleccionado.value?.nombre ?? 'Consumidor final'
   doc.text(`Cliente: ${clienteNombre}`, margin, y)
   y += lineHeight
-  doc.text(`Caja: ${DEFAULT_CAJA_ID}`, margin, y)
+  const cajaNombre = getSessionCajaNombre() ?? `Caja ${DEFAULT_CAJA_ID}`
+  doc.text(`Caja: ${cajaNombre}`, margin, y)
+  y += lineHeight
+  const usuarioNombre = getSessionUserName() ?? 'Usuario'
+  doc.text(`Usuario: ${usuarioNombre}`, margin, y)
+  y += lineHeight
+  doc.text(`Tipo de pago: ${formatoTipoPago(tipoPago.value)}`, margin, y)
   y += lineHeight
   doc.text(`Nota: ${notaRapida.value}`, margin, y)
   y += lineHeight
@@ -920,6 +978,11 @@ const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.val
   y += lineHeight
   doc.text('Impuesto', margin, y)
   doc.text(formatCurrency(0), right, y, { align: 'right' })
+  if (resumen.descuento > 0) {
+    y += lineHeight
+    doc.text('Ahorro', margin, y)
+    doc.text(`-${formatCurrency(resumen.descuento)}`, right, y, { align: 'right' })
+  }
   y += lineHeight
   doc.setFontSize(12)
   doc.text('Total', margin, y)
@@ -1009,7 +1072,6 @@ const imprimirTicketResumen = () => {
         </ul>
       </div>
       <div class="topbar__right">
-        <span class="chip">Caja 01</span>
         <span class="chip" :class="isOnline ? 'chip--online' : 'chip--offline'">
           {{ isOnline ? 'En linea' : 'Offline' }}
         </span>
@@ -1058,18 +1120,6 @@ const imprimirTicketResumen = () => {
             </button>
           </div>
         </div>
-
-        <header class="panel__encabezado panel__encabezado--carrito">
-          <div class="botonera">
-            <button type="button" class="boton secundaria" @click="limpiarCarrito">Vaciar</button>
-            <button type="button" class="boton secundaria" @click="mostrarTicketModal = true">Vista previa F9</button>
-            <button type="button" class="boton" @click="cobrarRapido">Pago exacto</button>
-          </div>
-          <div class="botonera">
-            <button type="button" class="boton secundaria" @click="guardarTicket">Guardar PDF</button>
-            <button type="button" class="boton" @click="imprimirTicket">Imprimir recibo</button>
-          </div>
-        </header>
 
         <div class="tabla-header" aria-hidden="true">
           <span>Nombre del producto</span>
@@ -1161,11 +1211,10 @@ const imprimirTicketResumen = () => {
             <button
               type="button"
               class="tipo-pago__boton"
-              :class="{ activo: tipoPago === 'credito' }"
-              @click="tipoPago = 'credito'"
+              @click="focusUltimaCantidad"
             >
               <span class="tipo-pago__key">F4</span>
-              <span>Credito</span>
+              <span>Cantidad</span>
             </button>
             <button
               type="button"
@@ -1176,9 +1225,14 @@ const imprimirTicketResumen = () => {
               <span class="tipo-pago__key">F5</span>
               <span>Tarjeta</span>
             </button>
-            <button type="button" class="tipo-pago__boton">
+            <button
+              type="button"
+              class="tipo-pago__boton"
+              :class="{ activo: tipoPago === 'credito' }"
+              @click="tipoPago = 'credito'"
+            >
               <span class="tipo-pago__key">F6</span>
-              <span>Cantidad</span>
+              <span>Credito</span>
             </button>
           </div>
         </div>
@@ -1216,13 +1270,10 @@ const imprimirTicketResumen = () => {
         <div class="acciones-finales">
           <span class="estado">{{ ultimaAccion }}</span>
           <div class="acciones-finales__botones">
-            <button type="button" class="boton primario" @click="guardarVentaPendiente">Guardar venta</button>
+            <button type="button" class="boton primario" @click="guardarVentaPendiente">Guardar venta F9</button>
             <button type="button" class="boton primario" @click="cerrarVenta">Cobrar F10</button>
           </div>
         </div>
-        <pre v-if="mostrarPayloadVenta && payloadVenta" class="payload">
-{{ JSON.stringify(payloadVenta, null, 2) }}
-        </pre>
       </section>
     </section>
 
@@ -1262,6 +1313,10 @@ const imprimirTicketResumen = () => {
               <span>Subtotal</span>
               <strong>{{ formatCurrency(resumenCarrito.subtotalBruto) }}</strong>
             </div>
+            <div v-if="resumenCarrito.descuentoLineas > 0">
+              <span>Ahorro</span>
+              <strong>-{{ formatCurrency(resumenCarrito.descuentoLineas) }}</strong>
+            </div>
             <div>
               <span>Impuesto</span>
               <strong>{{ formatCurrency(resumenCarrito.impuesto) }}</strong>
@@ -1280,6 +1335,8 @@ const imprimirTicketResumen = () => {
       class="modal"
       role="dialog"
       aria-modal="true"
+      tabindex="0"
+      @keydown.esc.prevent="cerrarModalDescuento"
       @click.self="cerrarModalDescuento"
     >
       <section class="modal__contenido" @click.stop>
@@ -1291,11 +1348,24 @@ const imprimirTicketResumen = () => {
         <div class="modal__form">
           <label>
             Desc. %
-            <input v-model.number="descuentoItem.descuentoPct" type="number" min="0" max="100" step="1" />
+            <input
+              v-model.number="descuentoItem.descuentoPct"
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              @keydown.enter.prevent="cerrarModalDescuento"
+            />
           </label>
           <label>
             Desc. $
-            <input v-model.number="descuentoItem.descuentoMonto" type="number" min="0" step="100" />
+            <input
+              v-model.number="descuentoItem.descuentoMonto"
+              type="number"
+              min="0"
+              step="100"
+              @keydown.enter.prevent="cerrarModalDescuento"
+            />
           </label>
         </div>
         <div class="modal__acciones">
@@ -1309,6 +1379,8 @@ const imprimirTicketResumen = () => {
       class="modal"
       role="dialog"
       aria-modal="true"
+      tabindex="0"
+      @keydown.esc.prevent="mostrarResumenCobro = false"
       @click.self="mostrarResumenCobro = false"
     >
       <section class="modal__contenido" @click.stop>
@@ -1336,6 +1408,10 @@ const imprimirTicketResumen = () => {
           </div>
           <div>
             <dt>Descuento</dt>
+            <dd>-{{ formatCurrency(resumenCobro.descuento) }}</dd>
+          </div>
+          <div v-if="resumenCobro.descuento > 0">
+            <dt>Ahorro</dt>
             <dd>-{{ formatCurrency(resumenCobro.descuento) }}</dd>
           </div>
           <div class="total">
@@ -2015,7 +2091,18 @@ const imprimirTicketResumen = () => {
 }
 
 .totales .cambio {
-  color: #c7f9cc;
+  color: #bbf7d0;
+  font-weight: 700;
+  font-size: 1.1rem;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  padding: 0.35rem 0.45rem;
+  border-radius: 0.65rem;
+}
+
+.totales .cambio dd {
+  font-size: 1.2rem;
+  font-weight: 800;
 }
 
 .ticket {

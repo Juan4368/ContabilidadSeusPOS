@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { ENDPOINTS } from '../config/endpoints'
 
@@ -841,12 +841,84 @@ const limpiarCacheProductosPos = () => {
   }, 2000)
 }
 
+const manejarOfflineEncolado = (event: Event) => {
+  const detalle = (event as CustomEvent<{ url?: string; method?: string; body?: Record<string, unknown> | null }>).detail
+  if (!detalle?.url || detalle.method !== 'POST' || !detalle.body) return
+
+  if (detalle.url.includes(CLIENTES_ENDPOINT)) {
+    const nuevo: Cliente = {
+      id: String(detalle.body.id ?? detalle.body.cliente_id ?? Date.now()),
+      nombre: String(detalle.body.nombre ?? ''),
+      telefono: String(detalle.body.telefono ?? ''),
+      email: String(detalle.body.email ?? ''),
+      descuentoPesos: Number(detalle.body.descuento_pesos ?? detalle.body.descuentoPesos ?? 0),
+      descuentoPorcentaje: Number(detalle.body.descuento_porcentaje ?? detalle.body.descuentoPorcentaje ?? 0),
+      createdAt: new Date().toISOString()
+    }
+    clientes.unshift(nuevo)
+    return
+  }
+
+  if (detalle.url.includes(PROVEEDORES_ENDPOINT)) {
+    const nuevo: Proveedor = {
+      id: Number(detalle.body.id ?? Date.now()),
+      nombre: String(detalle.body.nombre ?? ''),
+      telefono: String(detalle.body.telefono ?? ''),
+      email: String(detalle.body.email ?? '')
+    }
+    proveedores.unshift(nuevo)
+    return
+  }
+
+  if (detalle.url.includes(CATEGORIAS_CONTABILIDAD_ENDPOINT)) {
+    const nuevo: CategoriaContabilidad = {
+      id: Number(detalle.body.id ?? Date.now()),
+      nombre: String(detalle.body.nombre ?? ''),
+      codigo: detalle.body.codigo ? String(detalle.body.codigo) : undefined,
+      tipo_categoria: detalle.body.tipo_categoria ? String(detalle.body.tipo_categoria) : undefined
+    }
+    categoriasContabilidad.unshift(nuevo)
+    return
+  }
+
+  if (detalle.url.includes(CATEGORIAS_ENDPOINT)) {
+    const nuevo: Categoria = {
+      id: Number(detalle.body.id ?? Date.now()),
+      nombre: String(detalle.body.nombre ?? ''),
+      descripcion: String(detalle.body.descripcion ?? ''),
+      estado: 'activo'
+    }
+    categorias.unshift(nuevo)
+    return
+  }
+
+  if (detalle.url.includes(USUARIOS_REGISTRO_ENDPOINT)) {
+    const nuevo: Usuario = {
+      user_id: Number(detalle.body.user_id ?? Date.now()),
+      username: String(detalle.body.username ?? ''),
+      email: String(detalle.body.email ?? ''),
+      telephone_number: null,
+      is_active: true,
+      is_verified: false,
+      last_login_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+    usuarios.unshift(nuevo)
+  }
+}
+
 onMounted(() => {
   void cargarClientes()
   void cargarUsuarios()
   void cargarCategorias()
   void cargarCategoriasContabilidad()
   void cargarProveedores()
+  window.addEventListener('app:offline-enqueued', manejarOfflineEncolado as EventListener)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('app:offline-enqueued', manejarOfflineEncolado as EventListener)
 })
 </script>
 

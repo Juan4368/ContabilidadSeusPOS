@@ -31,6 +31,7 @@ type CuentaPorCobrar = {
 const CUENTAS_ENDPOINT = ENDPOINTS.CONTABILIDAD_CUENTAS
 
 const cuentas = ref<CuentaPorCobrar[]>([])
+const filtroCliente = ref('')
 const cargando = ref(false)
 const error = ref<string | null>(null)
 const seleccionada = ref<CuentaPorCobrar | null>(null)
@@ -65,6 +66,17 @@ const totalSaldo = computed(() =>
 const totalPendientes = computed(
   () => cuentas.value.filter((item) => item.estado?.toUpperCase() === 'PENDIENTE').length
 )
+
+const cuentasFiltradas = computed(() => {
+  const criterio = filtroCliente.value.trim().toLowerCase()
+  if (!criterio) return cuentas.value
+  return cuentas.value.filter((item) => {
+    const nombre = (item.cliente_nombre ?? '').toLowerCase()
+    const factura = String(item.numero_factura ?? '').toLowerCase()
+    const ventaId = String(item.venta_id ?? '')
+    return nombre.includes(criterio) || factura.includes(criterio) || ventaId.includes(criterio)
+  })
+})
 
 const formatoPesos = (valor: number) =>
   valor.toLocaleString('es-CO', {
@@ -161,8 +173,18 @@ const registrarAbono = async () => {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
-    mensajeAbono.value = 'Abono registrado correctamente.'
-    await cargarCuentas()
+    const data = await respuesta.json().catch(() => ({}))
+    if ((data as { offline?: boolean }).offline) {
+      const saldoActual = Number(cuentaAbono.value.saldo ?? 0)
+      const nuevoSaldo = Math.max(saldoActual - formularioAbono.value.monto, 0)
+      cuentas.value = cuentas.value.map((item) =>
+        item.id === cuentaAbono.value?.id ? { ...item, saldo: String(nuevoSaldo) } : item
+      )
+      mensajeAbono.value = 'Abono guardado (pendiente de sincronizar).'
+    } else {
+      mensajeAbono.value = 'Abono registrado correctamente.'
+      await cargarCuentas()
+    }
   } catch (err) {
     console.error('Error al registrar abono', err)
     const detalle = err instanceof Error ? err.message : String(err)
@@ -222,15 +244,26 @@ onMounted(() => {
 
     <section class="panel">
       <header class="panel__cabecera">
-        <h2>Listado de cuentas</h2>
-        <p>Selecciona una cuenta para ver el detalle de la venta.</p>
+        <div>
+          <h2>Listado de cuentas</h2>
+          <p>Selecciona una cuenta para ver el detalle de la venta.</p>
+        </div>
+        <div class="cartera__buscador">
+          <label for="buscar-cliente">Buscar cliente</label>
+          <input
+            id="buscar-cliente"
+            v-model="filtroCliente"
+            type="search"
+            placeholder="Nombre del cliente"
+          />
+        </div>
       </header>
 
       <p v-if="cargando" class="ayuda">Cargando cuentas...</p>
       <p v-else-if="error" class="ayuda ayuda--error">{{ error }}</p>
 
       <ul v-else class="lista">
-        <li v-for="cuenta in cuentas" :key="cuenta.id">
+        <li v-for="cuenta in cuentasFiltradas" :key="cuenta.id">
           <div>
             <strong>{{ cuenta.cliente_nombre || 'Sin cliente' }}</strong>
             <small>Factura {{ cuenta.numero_factura || cuenta.venta_id }}</small>
@@ -370,6 +403,25 @@ onMounted(() => {
   align-items: center;
   gap: 0.6rem;
   flex-wrap: wrap;
+}
+
+.cartera__buscador {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 220px;
+}
+
+.cartera__buscador label {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.cartera__buscador input {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.4);
+  color: #e2e8f0;
+  padding: 0.5rem 0.7rem;
 }
 
 .boton {

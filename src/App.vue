@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 
 import POSView from './views/POSView.vue'
 import StockView from './views/StockView.vue'
@@ -39,6 +39,14 @@ const sesionCajaSesionId = ref<number | null>(null)
 const sesionToken = ref<string | null>(null)
 const loginError = ref('')
 const loginCargando = ref(false)
+const totalCuenta = ref(0)
+const ventasPendientes = ref(0)
+const cargandoPendientes = ref(false)
+const errorPendientes = ref<string | null>(null)
+const appOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+const appSyncing = ref(false)
+const appQueueCount = ref(0)
+let pendientesInterval: number | undefined
 const LOGIN_ENDPOINT = ENDPOINTS.LOGIN
 
 type Caja = {
@@ -71,7 +79,7 @@ const parseJwt = (token: string): Record<string, unknown> | null => {
   }
 }
 
-const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componente: typeof POSView }> = [
+const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componente: Component }> = [
   { id: 'menu-principal', nombre: 'Menu principal', descripcion: 'Resumen de vistas', componente: MenuPrincipalView },
   { id: 'pos', nombre: 'POS', descripcion: 'Cobro en mostrador', componente: POSView },
   { id: 'contabilidad', nombre: 'Contabilidad', descripcion: 'Ingresos, egresos y cartera', componente: ContabilidadView },
@@ -85,31 +93,21 @@ const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componen
   { id: 'cierre-caja', nombre: 'Cierre caja', descripcion: 'Resumen y cierre del turno', componente: CierreCajaView }
 ]
 
-const esCajero = computed(() => sesionRoles.value.map((rol) => rol.toLowerCase()).includes('cajero'))
 const tieneCajaSeleccionada = computed(() => Number.isFinite(sesionCajaId.value) && Number(sesionCajaId.value) > 0)
 const cajaAbiertaEnSesion = computed(() => Number.isFinite(sesionCajaId.value) && Number(sesionCajaId.value) > 0)
 
-const vistasDisponibles = computed(() => {
-  if (!esCajero.value) return vistas
-  const permitidas: VistaId[] = [
-    'menu-principal',
-    'pos',
-    'contabilidad',
-    'cartera',
-    'admin',
-    'prestamo-cajas',
-    'cierre-caja'
-  ]
-  return vistas.filter((vista) => permitidas.includes(vista.id))
-})
-
-const componenteActual = computed(
-  () => vistasDisponibles.value.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView
+const vistasDisponibles = computed(() =>
+  vistas.filter(
+    (vista) =>
+      vista.id === 'menu-principal' || vista.id === 'pos' || vista.id === 'ventas-pendientes'
+  )
 )
 
-const vistasMenuPrincipal = computed(() => vistasDisponibles.value.filter((vista) => vista.id !== 'menu-principal'))
+const componenteActual = computed(() => vistas.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView)
 
-watch(vistasDisponibles, (nuevas) => {
+const vistasMenuPrincipal = computed(() => vistas.filter((vista) => vista.id !== 'menu-principal'))
+
+watch(vistas, (nuevas) => {
   if (!nuevas.find((vista) => vista.id === vistaActiva.value)) {
     vistaActiva.value = nuevas[0]?.id ?? 'pos'
   }
@@ -118,8 +116,11 @@ watch(vistasDisponibles, (nuevas) => {
 watch(sesionIniciada, (iniciada) => {
   if (iniciada) {
     void cargarCajas()
+    void cargarPendientes()
   } else {
     cajas.value = []
+    ventasPendientes.value = 0
+    errorPendientes.value = null
   }
 })
 
@@ -130,18 +131,81 @@ const cambiarVista = (event: Event) => {
   }
 }
 
+const actualizarTotalCuenta = (event: Event) => {
+  const detalle = (event as CustomEvent<{ total?: number }>).detail
+  if (detalle && typeof detalle.total === 'number') {
+    totalCuenta.value = detalle.total
+  }
+}
+
+const actualizarEstadoOffline = (event: Event) => {
+  const detalle = (event as CustomEvent<{ online?: boolean; syncing?: boolean; queueCount?: number }>).detail
+  if (detalle && typeof detalle.online === 'boolean') {
+    appOnline.value = detalle.online
+  }
+  if (detalle && typeof detalle.syncing === 'boolean') {
+    appSyncing.value = detalle.syncing
+  }
+  if (detalle && typeof detalle.queueCount === 'number') {
+    appQueueCount.value = detalle.queueCount
+  }
+}
+
+const cargarPendientes = async () => {
+  cargandoPendientes.value = true
+  errorPendientes.value = null
+  try {
+    const respuesta = await fetch(`${ENDPOINTS.VENTAS_LOCAL}?estado=false`)
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json().catch(() => [])) as unknown
+    const lista = Array.isArray(data) ? data : Array.isArray((data as { data?: unknown[] }).data) ? (data as { data?: unknown[] }).data : []
+    ventasPendientes.value = Array.isArray(lista) ? lista.length : 0
+  } catch (err) {
+    const detalle = err instanceof Error ? err.message : String(err)
+    errorPendientes.value = detalle || 'No fue posible cargar ventas pendientes.'
+    ventasPendientes.value = 0
+  } finally {
+    cargandoPendientes.value = false
+  }
+}
+
 onMounted(() => {
   window.addEventListener('app:cambiar-vista', cambiarVista as EventListener)
+  window.addEventListener('pos:total-actualizado', actualizarTotalCuenta as EventListener)
+  window.addEventListener('pos:pendientes-actualizados', cargarPendientes as EventListener)
+  window.addEventListener('app:offline-status', actualizarEstadoOffline as EventListener)
+  pendientesInterval = window.setInterval(() => {
+    if (sesionIniciada.value) {
+      void cargarPendientes()
+    }
+  }, 10000)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('app:cambiar-vista', cambiarVista as EventListener)
+  window.removeEventListener('pos:total-actualizado', actualizarTotalCuenta as EventListener)
+  window.removeEventListener('pos:pendientes-actualizados', cargarPendientes as EventListener)
+  window.removeEventListener('app:offline-status', actualizarEstadoOffline as EventListener)
+  if (pendientesInterval) {
+    window.clearInterval(pendientesInterval)
+  }
 })
 
-const seleccionarVista = (vista: VistaId) => {
+const seleccionarVista = (vistaId: string) => {
+  const vista = vistaId as VistaId
   if (vista === 'pos' && !tieneCajaSeleccionada.value) return
   vistaActiva.value = vista
 }
+
+const formatCurrency = (monto: number) =>
+  monto.toLocaleString('es-CO', {
+    style: 'currency',
+    currency: 'COP',
+    minimumFractionDigits: 0
+  })
 
 const iniciarSesion = async (credenciales: { usuario: string; contrasena: string }) => {
   loginError.value = ''
@@ -314,10 +378,12 @@ const cargarCajas = async () => {
   cargandoCajas.value = true
   errorCajas.value = null
   try {
-    const respuesta = await fetch(ENDPOINTS.CONTABILIDAD_CAJAS)
+    const endpoint = ENDPOINTS.CONTABILIDAD_CAJAS
+    const respuesta = await fetch(endpoint)
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
-      throw new Error(detalle || `Error ${respuesta.status}`)
+      const cuerpo = detalle ? ` body=${detalle}` : ''
+      throw new Error(`HTTP ${respuesta.status} (${respuesta.statusText}) endpoint=${endpoint}${cuerpo}`)
     }
     const data = await respuesta.json()
     const lista = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
@@ -335,7 +401,10 @@ const cargarCajas = async () => {
       .filter((item) => Number.isFinite(item.id) && item.id > 0)
   } catch (err) {
     console.error('No se pudieron cargar cajas', err)
-    errorCajas.value = 'No fue posible cargar las cajas.'
+    const detalle = err instanceof Error ? err.message : String(err)
+    errorCajas.value = detalle
+      ? `No fue posible cargar las cajas. ${detalle}`
+      : 'No fue posible cargar las cajas.'
   } finally {
     cargandoCajas.value = false
   }
@@ -443,6 +512,14 @@ hidratarSesion()
 
 <template>
   <main class="shell">
+    <div v-if="!appOnline" class="offline-banner">
+      Sin conexiÃ³n. Modo offline activo.
+      <small v-if="appQueueCount">Pendientes por sincronizar: {{ appQueueCount }}</small>
+    </div>
+    <div v-else-if="appSyncing" class="offline-banner offline-banner--sync">
+      Sincronizando datos...
+      <small v-if="appQueueCount">Pendientes: {{ appQueueCount }}</small>
+    </div>
     <LoginView
       v-if="!sesionIniciada"
       :error="loginError"
@@ -451,7 +528,6 @@ hidratarSesion()
     />
     <template v-else>
       <header class="selector">
-        <p class="selector__titulo">Vistas disponibles</p>
         <div class="selector__botones">
           <button
             v-for="vista in vistasDisponibles"
@@ -463,7 +539,14 @@ hidratarSesion()
           >
             <span class="selector__nombre">{{ vista.nombre }}</span>
             <small class="selector__descripcion">{{ vista.descripcion }}</small>
+            <span v-if="vista.id === 'ventas-pendientes'" class="selector__badge">
+              {{ cargandoPendientes ? '...' : ventasPendientes }}
+            </span>
           </button>
+        </div>
+        <div class="selector__total">
+          <span class="selector__total-label">Total cuenta</span>
+          <strong class="selector__total-valor">{{ formatCurrency(totalCuenta) }}</strong>
         </div>
         <div class="selector__cajas">
           <span class="selector__cajas-label">Cajas</span>
@@ -512,7 +595,14 @@ hidratarSesion()
         :vistas="vistasMenuPrincipal"
         :vista-activa="vistaActiva"
         :pos-bloqueado="!tieneCajaSeleccionada"
+        :cajas="cajas"
+        :cargando-cajas="cargandoCajas"
+        :error-cajas="errorCajas"
+        :sesion-caja-id="sesionCajaId"
+        :caja-abierta-en-sesion="cajaAbiertaEnSesion"
+        :actualizando-caja="actualizandoCaja"
         @seleccionar="seleccionarVista"
+        @seleccionar-caja="seleccionarCaja"
       />
       <component v-else :is="componenteActual" />
     </template>
@@ -527,8 +617,8 @@ hidratarSesion()
 
 .selector {
   display: grid;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 0.9rem;
   border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(10, 11, 14, 0.8);
@@ -537,6 +627,7 @@ hidratarSesion()
 .selector__titulo {
   margin: 0;
   font-weight: 700;
+  font-size: 0.95rem;
   letter-spacing: 0.02em;
   color: #e2e8f0;
 }
@@ -544,7 +635,72 @@ hidratarSesion()
 .selector__botones {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.4rem;
+}
+
+.selector__total {
+  display: grid;
+  gap: 0.25rem;
+  justify-items: center;
+  align-content: center;
+  text-align: center;
+  padding: 0.6rem 0.9rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(250, 204, 21, 0.55);
+  background: linear-gradient(135deg, rgba(250, 204, 21, 0.2), rgba(15, 23, 42, 0.55));
+  color: #fff7ed;
+  min-width: 220px;
+}
+
+.selector__total-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(254, 243, 199, 0.9);
+}
+
+.selector__total-valor {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #fef3c7;
+}
+
+.selector__badge {
+  align-self: flex-start;
+  margin-top: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #0f172a;
+  background: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.9);
+}
+
+.offline-banner {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  background: rgba(127, 29, 29, 0.35);
+  color: #fecaca;
+  font-weight: 700;
+}
+
+.offline-banner small {
+  font-weight: 600;
+  color: #fee2e2;
+}
+
+.offline-banner--sync {
+  border-color: rgba(250, 204, 21, 0.45);
+  background: rgba(120, 53, 15, 0.35);
+  color: #fde68a;
 }
 
 .selector__cajas {
@@ -568,8 +724,8 @@ hidratarSesion()
   background: rgba(120, 126, 137, 0.14);
   color: #e2e8f0;
   border-radius: 0.65rem;
-  padding: 0.35rem 0.55rem;
-  font-size: 0.85rem;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.8rem;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
@@ -610,7 +766,7 @@ hidratarSesion()
 .selector__sesion {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.35rem;
   justify-content: flex-end;
 }
 
@@ -619,15 +775,16 @@ hidratarSesion()
   background: rgba(255, 255, 255, 0.06);
   color: #e2e8f0;
   border-radius: 0.75rem;
-  padding: 0.5rem 0.8rem;
+  padding: 0.35rem 0.6rem;
   font-weight: 600;
+  font-size: 0.85rem;
 }
 
 .selector__sesion-rol {
   margin-left: 0.35rem;
   color: #cbd5e1;
   font-weight: 500;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
 }
 
 .selector__sesion-cerrar {
@@ -635,8 +792,9 @@ hidratarSesion()
   background: rgba(239, 68, 68, 0.14);
   color: #fee2e2;
   border-radius: 0.75rem;
-  padding: 0.5rem 0.8rem;
+  padding: 0.35rem 0.6rem;
   font-weight: 600;
+  font-size: 0.85rem;
   cursor: pointer;
 }
 
@@ -645,8 +803,9 @@ hidratarSesion()
   background: rgba(255, 255, 255, 0.06);
   color: #e2e8f0;
   border-radius: 0.75rem;
-  padding: 0.5rem 0.8rem;
+  padding: 0.35rem 0.6rem;
   font-weight: 600;
+  font-size: 0.85rem;
 }
 
 .selector__boton {
@@ -654,8 +813,8 @@ hidratarSesion()
   border: 1px solid rgba(148, 163, 184, 0.28);
   color: #e2e8f0;
   border-radius: 0.75rem;
-  padding: 0.6rem 0.85rem;
-  min-width: 160px;
+  padding: 0.45rem 0.7rem;
+  min-width: 140px;
   cursor: pointer;
   text-align: left;
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
@@ -682,11 +841,13 @@ hidratarSesion()
 .selector__nombre {
   display: block;
   font-weight: 700;
+  font-size: 0.9rem;
 }
 
 .selector__descripcion {
   display: block;
   color: #cbd5e1;
+  font-size: 0.8rem;
 }
 
 .selector__bloqueo {

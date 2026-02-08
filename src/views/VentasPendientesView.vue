@@ -10,6 +10,7 @@ type PendingItem = {
   clienteNombre?: string
   total: number
   items: number
+  offline?: boolean
 }
 
 const VENTAS_ENDPOINT = ENDPOINTS.VENTAS_LOCAL
@@ -97,15 +98,49 @@ const abrirPendiente = async (item: PendingItem) => {
   }
 }
 
+const agregarPendienteOffline = (payload: Record<string, unknown>) => {
+  const estadoRaw = payload.estado
+  const esPendiente = estadoRaw === false || estadoRaw === 'pendiente'
+  if (!esPendiente) return
+  const detalles = payload.detalles
+  const items = Array.isArray(detalles) ? detalles.length : Number(payload.items ?? 0)
+  const total =
+    Number(payload.total ?? 0) ||
+    (Array.isArray(detalles)
+      ? detalles.reduce((acc, d) => acc + Number((d as Record<string, unknown>).subtotal ?? 0), 0)
+      : 0)
+  const clienteIdRaw = payload.cliente_id ?? payload.clienteId ?? null
+  const clienteId = (clienteIdRaw ?? null) as number | null
+  const clienteIdStr = clienteIdRaw ? String(clienteIdRaw) : ''
+  const clienteNombre = (payload.cliente_nombre ??
+    payload.clienteNombre ??
+    (payload.cliente as Record<string, unknown> | undefined)?.nombre ??
+    clientesMap.get(clienteIdStr) ??
+    '') as string
+  const id = Number(payload.venta_id ?? payload.id ?? Date.now())
+  const fecha = String(payload.fecha ?? new Date().toISOString())
+  const nuevo: PendingItem = { id, fecha, clienteId, clienteNombre, items, total, offline: true }
+  pendientes.value = [nuevo, ...pendientes.value.filter((item) => item.id !== nuevo.id)]
+}
+
+const manejarOfflineEncolado = (event: Event) => {
+  const detalle = (event as CustomEvent<{ url?: string; method?: string; body?: Record<string, unknown> | null }>).detail
+  if (!detalle?.url || detalle.method !== 'POST' || !detalle.body) return
+  if (!detalle.url.includes('/ventas/')) return
+  agregarPendienteOffline(detalle.body)
+}
+
 onMounted(() => {
   void cargarClientes().then(cargarPendientes)
   window.addEventListener('pos:pendientes-actualizados', cargarPendientes as EventListener)
   window.addEventListener('focus', cargarPendientes)
+  window.addEventListener('app:offline-enqueued', manejarOfflineEncolado as EventListener)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('pos:pendientes-actualizados', cargarPendientes as EventListener)
   window.removeEventListener('focus', cargarPendientes)
+  window.removeEventListener('app:offline-enqueued', manejarOfflineEncolado as EventListener)
 })
 </script>
 

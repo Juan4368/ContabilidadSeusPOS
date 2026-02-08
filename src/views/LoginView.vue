@@ -12,6 +12,7 @@ const emit = defineEmits<{
 
 const usuario = ref('')
 const contrasena = ref('')
+const mostrarClave = ref(false)
 const localError = ref('')
 const enviar = () => {
   localError.value = ''
@@ -43,10 +44,18 @@ const enviar = () => {
         <label>
           <span>Usuario</span>
           <input v-model="usuario" type="text" autocomplete="username" />
-        </label>
-        <label>
+        </label>        <label>
           <span>Contraseña</span>
-          <input v-model="contrasena" type="password" autocomplete="current-password" />
+          <div class="login__password">
+            <input
+              v-model="contrasena"
+              :type="mostrarClave ? 'text' : 'password'"
+              autocomplete="current-password"
+            />
+            <button type="button" class="login__toggle" @click="mostrarClave = !mostrarClave">
+              {{ mostrarClave ? 'Ocultar' : 'Mostrar' }}
+            </button>
+          </div>
         </label>
         <button type="submit" class="login__boton" :disabled="loading">
           {{ loading ? 'Ingresando...' : 'Entrar' }}
@@ -133,6 +142,30 @@ const enviar = () => {
 
 .login__form input {
   max-width: 260px;
+}
+
+.login__password {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  max-width: 260px;
+}
+
+.login__toggle {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.4);
+  color: #e2e8f0;
+  border-radius: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login__toggle:hover,
+.login__toggle:focus-visible {
+  outline: none;
+  border-color: rgba(250, 204, 21, 0.6);
 }
 
 

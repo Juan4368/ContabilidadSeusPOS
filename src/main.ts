@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import './style.css'
 import App from './App.vue'
+import { initOfflineQueue, processOfflineQueue } from './utils/offline'
 
 const shouldSelectText = (target: EventTarget | null): target is HTMLInputElement | HTMLTextAreaElement => {
   if (!target) return false
@@ -18,6 +19,8 @@ window.addEventListener('focusin', (event) => {
 })
 
 createApp(App).mount('#app').$nextTick(() => {
+  initOfflineQueue()
+  void processOfflineQueue()
   // Use contextBridge
   window.ipcRenderer.on('main-process-message', (_event, message) => {
     console.log(message)

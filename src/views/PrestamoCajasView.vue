@@ -161,6 +161,20 @@ const crearPrestamo = async () => {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
+    const data = await respuesta.json().catch(() => ({}))
+    const dataObj = (data as Record<string, unknown>) ?? {}
+    if (dataObj.offline) {
+      const nuevo: PrestamoCaja = {
+        id: Date.now(),
+        nombre: payload.nombre,
+        cantidad_cajas: payload.cantidad_cajas,
+        entregado: payload.entregado,
+        fecha: payload.fecha,
+        cajero: payload.cajero,
+        actualizado_por: payload.actualizado_por
+      }
+      prestamos.value = [nuevo, ...prestamos.value]
+    }
     formCrear.value = {
       nombre: '',
       cantidad_cajas: 0,

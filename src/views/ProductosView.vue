@@ -415,8 +415,10 @@ const crearProducto = async () => {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
-    const data = await respuesta.json()
-    const normalizado = normalizarProducto(data, productos.length)
+    const data = await respuesta.json().catch(() => ({}))
+    const dataObj = (data as Record<string, unknown>) ?? {}
+    const fuente = dataObj.offline ? { id: Date.now(), ...payload } : dataObj
+    const normalizado = normalizarProducto(fuente, productos.length)
     if (normalizado) {
       productos.unshift(normalizado)
     }

@@ -5,28 +5,42 @@ type VistaItem = {
   descripcion: string
 }
 
+type Caja = {
+  id: number
+  nombre?: string
+  saldo_inicial?: number
+  estado?: string
+  usuario_id?: number | null
+  fecha_apertura?: string | null
+  fecha_cierre?: string | null
+  created_at?: string | null
+}
+
 const props = defineProps<{
   vistas: VistaItem[]
   vistaActiva: string
   posBloqueado: boolean
+  cajas: Caja[]
+  cargandoCajas: boolean
+  errorCajas: string | null
+  sesionCajaId: number | null
+  cajaAbiertaEnSesion: boolean
+  actualizandoCaja: boolean
 }>()
 
 const emit = defineEmits<{
   (event: 'seleccionar', vistaId: string): void
+  (event: 'seleccionar-caja', caja: Caja): void
 }>()
 
 const seleccionarVista = (vistaId: string) => {
   emit('seleccionar', vistaId)
 }
+
 </script>
 
 <template>
   <section class="menu">
-    <header class="menu__header">
-      <h2 class="menu__titulo">Menu principal</h2>
-      <p class="menu__descripcion">Selecciona una vista para continuar.</p>
-    </header>
-
     <div class="menu__grid">
       <button
         v-for="vista in props.vistas"
@@ -40,10 +54,6 @@ const seleccionarVista = (vistaId: string) => {
         <span class="menu__card-desc">{{ vista.descripcion }}</span>
       </button>
     </div>
-
-    <p v-if="props.posBloqueado" class="menu__nota">
-      Para acceder a la vista POS debes seleccionar una caja en el header.
-    </p>
   </section>
 </template>
 
@@ -54,30 +64,36 @@ const seleccionarVista = (vistaId: string) => {
   border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(12, 14, 18, 0.7);
   display: grid;
-  gap: 1rem;
-}
-
-.menu__header {
-  display: grid;
-  gap: 0.25rem;
-}
-
-.menu__titulo {
-  margin: 0;
-  font-size: 1.35rem;
-  letter-spacing: 0.02em;
-  color: #f8fafc;
-}
-
-.menu__descripcion {
-  margin: 0;
-  color: #94a3b8;
+  gap: 0.75rem;
 }
 
 .menu__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.75rem;
+}
+
+.menu__acciones {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.menu__toggle {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.menu__toggle:hover,
+.menu__toggle:focus-visible {
+  outline: none;
+  transform: translateY(-1px);
+  border-color: rgba(250, 204, 21, 0.55);
 }
 
 .menu__card {
@@ -118,15 +134,5 @@ const seleccionarVista = (vistaId: string) => {
 .menu__card-desc {
   color: #cbd5e1;
   font-size: 0.9rem;
-}
-
-.menu__nota {
-  margin: 0;
-  color: #fde68a;
-  background: rgba(250, 204, 21, 0.08);
-  border: 1px dashed rgba(250, 204, 21, 0.5);
-  border-radius: 0.75rem;
-  padding: 0.75rem 0.9rem;
-  font-weight: 600;
 }
 </style>
