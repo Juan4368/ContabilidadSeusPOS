@@ -4,6 +4,7 @@ import jsPDF from 'jspdf'
 import { crearMovimientoFinanciero } from '../services/movimientosFinancieros'
 import { ENDPOINTS } from '../config/endpoints'
 import { getSessionUserId, getSessionUserName } from '../utils/session'
+import { nowUTCMinus5Iso } from '../utils/time'
 
 type Producto = {
   id: number
@@ -35,6 +36,15 @@ type Cliente = {
   documento?: string
   descuentoPesos?: number
   descuentoPorcentaje?: number
+}
+
+type ResumenCobro = {
+  subtotal: number
+  descuento: number
+  total: number
+  pagoRecibido: number
+  cambio: number
+  numeroFactura?: string
 }
 
 const CLIENTES_ENDPOINT = ENDPOINTS.CLIENTES
@@ -80,7 +90,7 @@ const pagoRecibido = ref(0)
 const notaRapida = ref('')
 const ultimaAccion = ref('Listo para vender')
 const ventaId = ref<number>(Date.now())
-const fechaVenta = ref(new Date().toISOString())
+const fechaVenta = ref(nowUTCMinus5Iso())
 const tipoPago = ref('efectivo')
 const estadoVenta = ref(true)
 const ventaPendienteId = ref<number | null>(null)
@@ -90,12 +100,14 @@ const payloadMovimiento = ref<string | null>(null)
 const mostrarPayloadVenta = ref(false)
 const mostrarTicketModal = ref(false)
 const mostrarResumenCobro = ref(false)
-const resumenCobro = ref({
+const payloadVentaTexto = computed(() => (payloadVenta.value ? JSON.stringify(payloadVenta.value, null, 2) : ''))
+const resumenCobro = ref<ResumenCobro>({
   subtotal: 0,
   descuento: 0,
   total: 0,
   pagoRecibido: 0,
-  cambio: 0
+  cambio: 0,
+  numeroFactura: ''
 })
 const pagoRecibidoModalInput = ref('')
 const parsePesos = (valor: string) => Number(String(valor).replace(/[^\d]/g, '')) || 0
@@ -448,7 +460,7 @@ const cargarClientes = async () => {
         console.warn('No se pudo escribir clientes.txt', err)
       }
     }
-    const timestamp = new Date().toISOString()
+    const timestamp = nowUTCMinus5Iso()
     await logClientes([`[${timestamp}] request endpoint=${CLIENTES_ENDPOINT}`])
     const respuesta = await fetch(CLIENTES_ENDPOINT)
     if (!respuesta.ok) {
@@ -682,7 +694,7 @@ const construirPayloadVenta = (estadoOverride?: boolean) => {
     cliente_id: clientePayload,
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
-    fecha: new Date().toISOString(),
+    fecha: nowUTCMinus5Iso(),
     detalles: carrito.value.map((item) => ({
       producto_id: item.backendId ?? item.id,
       cantidad: item.cantidad,
@@ -703,7 +715,7 @@ const construirPayloadActualizacion = (estadoOverride?: boolean) => {
   const esCredito = tipoPago.value === 'credito'
   const numeroFacturaPayload = numeroFacturaResumen.value?.trim() || null
   return {
-    fecha: new Date().toISOString(),
+    fecha: nowUTCMinus5Iso(),
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
     tipo_pago: tipoPagoPayload,
@@ -760,7 +772,7 @@ const registrarMovimientoIngreso = async (ventaId?: number | null) => {
     throw new Error('No se pudo identificar el usuario de la sesión.')
   }
   const payload = {
-    fecha: new Date().toISOString(),
+    fecha: nowUTCMinus5Iso(),
     tipo: 'INGRESO' as const,
     monto: montoVenta,
     concepto: 'venta',
@@ -803,6 +815,22 @@ const actualizarVentaApi = async (id: number, estadoOverride?: boolean) => {
   return contenido
 }
 
+const obtenerFacturaPorVenta = async (ventaId: number | null) => {
+  if (!ventaId || !Number.isFinite(ventaId)) return null
+  try {
+    const url = `${VENTAS_ENDPOINT}${ventaId}`
+    const respuesta = await fetch(url)
+    if (!respuesta.ok) {
+      return null
+    }
+    const data = (await respuesta.json()) as Record<string, unknown>
+    const factura = data?.numero_factura ?? data?.numeroFactura ?? null
+    return factura ? String(factura) : null
+  } catch {
+    return null
+  }
+}
+
 const cerrarVenta = async () => {
   if (carrito.value.length === 0) {
     ultimaAccion.value = 'Agrega productos antes de cobrar'
@@ -814,7 +842,8 @@ const cerrarVenta = async () => {
       descuento: resumenCarrito.value.descuentoLineas,
       total: resumenCarrito.value.total,
       pagoRecibido: Number(pagoRecibido.value || 0),
-      cambio: resumenCarrito.value.cambio
+      cambio: resumenCarrito.value.cambio,
+      numeroFactura: ''
     }
     const snapshotItems = carrito.value.map((item) => ({ ...item }))
     let respuestaVenta: Record<string, unknown> | null = null
@@ -837,13 +866,18 @@ const cerrarVenta = async () => {
       console.error('No se pudo registrar el movimiento financiero', error)
       ultimaAccion.value = `Venta registrada, pero fallo el movimiento financiero: ${detalle}`
     }
+    void abrirCajonMonedero()
     limpiarCarrito()
     notaRapida.value = ''
     ventaId.value = Date.now()
-    fechaVenta.value = new Date().toISOString()
+    fechaVenta.value = nowUTCMinus5Iso()
     estadoVenta.value = true
     ultimaAccion.value = `Venta registrada. Total: ${formatCurrency(resumenCobro.value.total)}`
-    resumenCobro.value = snapshot
+    const facturaDesdeApi = await obtenerFacturaPorVenta(Number.isFinite(ventaIdFinal) ? ventaIdFinal : null)
+    if (facturaDesdeApi) {
+      numeroFacturaResumen.value = facturaDesdeApi
+    }
+    resumenCobro.value = { ...snapshot, numeroFactura: numeroFacturaResumen.value }
     pagoRecibidoModalInput.value = formatCurrency(snapshot.pagoRecibido || snapshot.total)
     reciboItems.value = snapshotItems
     mostrarResumenCobro.value = true
@@ -851,6 +885,9 @@ const cerrarVenta = async () => {
     const mensaje = error instanceof Error ? error.message : 'Error al guardar la venta'
     console.error('No se pudo guardar la venta', error)
     ultimaAccion.value = `No se pudo guardar la venta: ${mensaje}`
+    if (payloadVenta.value) {
+      mostrarPayloadVenta.value = true
+    }
   }
 }
 
@@ -884,8 +921,449 @@ const guardarVentaPendiente = () => {
   void guardar()
 }
 
-const imprimirTicket = () => {
-  window.print()
+const getPrinterConfig = () => {
+  try {
+    const raw = localStorage.getItem('pos_printer')
+    if (!raw) return null
+    const data = JSON.parse(raw) as {
+      deviceName?: string
+      widthMm?: number
+      silent?: boolean
+      scale?: number
+      method?: 'escpos' | 'html'
+    }
+    return {
+      deviceName: data?.deviceName?.trim() || undefined,
+      widthMm: Number(data?.widthMm) || 80,
+      silent: data?.silent !== false,
+      scale: Number(data?.scale) || 1,
+      method: data?.method === 'html' ? 'html' : 'escpos'
+    }
+  } catch {
+    return null
+  }
+}
+
+const inferirAnchoMm = (impresora: { name?: string; options?: Record<string, unknown>; paperSize?: { width?: number } }) => {
+  const name = (impresora?.name || '').toLowerCase()
+  if (name.includes('80') || name.includes('3"') || name.includes('3in') || name.includes('3 in')) return 80
+  if (name.includes('58') || name.includes('57') || name.includes('2"') || name.includes('2in') || name.includes('2 in'))
+    return 58
+
+  const paperSize =
+    (impresora as { paperSize?: { width?: number } }).paperSize ||
+    (impresora?.options?.paperSize as { width?: number } | undefined)
+  const widthMicrons = Number(paperSize?.width || 0)
+  if (widthMicrons > 0) {
+    const widthMm = widthMicrons / 1000
+    if (widthMm >= 45 && widthMm <= 65) return 58
+    if (widthMm >= 70 && widthMm <= 90) return 80
+  }
+  return null
+}
+
+const resolverConfigImpresora = async () => {
+  const config = getPrinterConfig()
+  if (config?.widthMm && config.widthMm !== 80) return config
+  const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p?: unknown) => Promise<unknown> } })
+    .ipcRenderer
+  if (!ipc?.invoke) return config
+  try {
+    const impresoras = (await ipc.invoke('pos:list-printers')) as Array<Record<string, unknown>>
+    if (!Array.isArray(impresoras) || impresoras.length === 0) return config
+    const objetivo =
+      impresoras.find((item) => item?.name === config?.deviceName) ||
+      impresoras.find((item) => Boolean(item?.isDefault)) ||
+      impresoras[0]
+    const nombreObjetivo = String((objetivo as { name?: string })?.name ?? '').toLowerCase()
+    const widthMm = inferirAnchoMm(objetivo as { name?: string; options?: Record<string, unknown>; paperSize?: { width?: number } })
+    if (widthMm) {
+      const escalaDefecto = config?.scale ?? (nombreObjetivo.includes('ish-58') ? 1.4 : 1)
+      return {
+        deviceName: config?.deviceName,
+        widthMm,
+        silent: config?.silent ?? true,
+        scale: escalaDefecto,
+        method: config?.method === 'html' ? 'html' : 'escpos'
+      }
+    }
+  } catch {
+    return config
+  }
+  return config
+}
+
+const normalizarTextoTicket = (value: string) => {
+  try {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\x20-\x7E]/g, '')
+  } catch {
+    return value.replace(/[^\x20-\x7E]/g, '')
+  }
+}
+
+const textoABytes = (value: string) => {
+  const limpio = normalizarTextoTicket(value)
+  const bytes: number[] = []
+  for (let i = 0; i < limpio.length; i += 1) {
+    bytes.push(limpio.charCodeAt(i) & 0xff)
+  }
+  return bytes
+}
+
+const wrapTexto = (value: string, width: number) => {
+  const limpio = normalizarTextoTicket(value)
+  if (limpio.length <= width) return [limpio]
+  const partes: string[] = []
+  let actual = ''
+  for (const palabra of limpio.split(' ')) {
+    if (!actual.length) {
+      actual = palabra
+      continue
+    }
+    if (actual.length + 1 + palabra.length <= width) {
+      actual = `${actual} ${palabra}`
+    } else {
+      partes.push(actual)
+      actual = palabra
+    }
+  }
+  if (actual) partes.push(actual)
+  return partes.flatMap((linea) => {
+    if (linea.length <= width) return [linea]
+    const divididas: string[] = []
+    let buffer = linea
+    while (buffer.length > width) {
+      divididas.push(buffer.slice(0, width))
+      buffer = buffer.slice(width)
+    }
+    if (buffer.length) divididas.push(buffer)
+    return divididas
+  })
+}
+
+const lineaIzqDer = (izq: string, der: string, width: number) => {
+  const left = normalizarTextoTicket(izq)
+  const right = normalizarTextoTicket(der)
+  if (left.length + right.length + 1 > width) {
+    const recorte = Math.max(width - right.length - 1, 0)
+    return `${left.slice(0, recorte)} ${right}`.trim()
+  }
+  return `${left}${' '.repeat(width - left.length - right.length)}${right}`
+}
+
+const construirBytesEscPos = (
+  items: ItemCarrito[],
+  resumen: { subtotal: number; descuento: number; total: number; pagoRecibido: number; cambio: number },
+  numeroFactura?: string,
+  widthMm = 80,
+  scale = 1
+) => {
+  const escala = Math.max(0.5, Math.min(1.6, Number(scale) || 1))
+  const usarFuenteB = escala <= 0.9
+  let widthCharsBase = widthMm <= 60 ? (usarFuenteB ? 42 : 32) : usarFuenteB ? 64 : 48
+  const sizeMode = escala >= 1.3 ? 0x11 : escala >= 1.15 ? 0x01 : 0x00
+  if (sizeMode === 0x11) {
+    widthCharsBase = Math.max(16, Math.floor(widthCharsBase / 2))
+  }
+  const widthChars = widthCharsBase
+  const bytes: number[] = []
+  const add = (text: string) => bytes.push(...textoABytes(text), 0x0a)
+  const setAlign = (n: number) => bytes.push(0x1b, 0x61, n)
+  const setBold = (on: boolean) => bytes.push(0x1b, 0x45, on ? 1 : 0)
+  const setSize = (n: number) => bytes.push(0x1d, 0x21, n)
+  const setFont = (n: number) => bytes.push(0x1b, 0x4d, n)
+  const hr = () => add('-'.repeat(widthChars))
+
+  bytes.push(0x1b, 0x40)
+  setFont(usarFuenteB ? 1 : 0)
+  setSize(sizeMode)
+  setAlign(1)
+  setBold(true)
+  add('AUTOSERVICIO EL PAISA')
+  setBold(false)
+  add('FACTURA DE VENTA')
+  setAlign(0)
+  hr()
+
+  const fecha = new Date().toLocaleString('es-CO')
+  const numero =
+    (numeroFactura?.trim() || numeroFacturaResumen.value?.trim())
+      ? (numeroFactura?.trim() || numeroFacturaResumen.value?.trim() || '')
+      : `POS-${ventaId.value}`
+  const clienteNombre = clienteSeleccionado.value?.nombre ?? 'Consumidor final'
+  const cajaNombre = getSessionCajaNombre() ?? `Caja ${DEFAULT_CAJA_ID}`
+  const usuarioNombre = getSessionUserName() ?? 'Usuario'
+  const nota = notaRapida.value?.trim() ? notaRapida.value.trim() : ''
+
+  add(lineaIzqDer('Factura', numero, widthChars))
+  add(lineaIzqDer('Fecha', fecha, widthChars))
+  add(lineaIzqDer('Cliente', clienteNombre, widthChars))
+  add(lineaIzqDer('Caja', cajaNombre, widthChars))
+  add(lineaIzqDer('Usuario', usuarioNombre, widthChars))
+  add(lineaIzqDer('Pago', formatoTipoPago(tipoPago.value), widthChars))
+  if (nota) {
+    wrapTexto(`Nota: ${nota}`, widthChars).forEach(add)
+  }
+  hr()
+
+  if (!items.length) {
+    add('Sin productos aun')
+  } else {
+    items.forEach((item) => {
+      const lineasNombre = wrapTexto(item.nombre, widthChars)
+      lineasNombre.forEach(add)
+      add(lineaIzqDer(`x${item.cantidad}`, formatCurrency(totalLinea(item)), widthChars))
+      add(lineaIzqDer('P.U', formatCurrency(item.precio), widthChars))
+    })
+  }
+
+  hr()
+  add(lineaIzqDer('Subtotal', formatCurrency(resumen.subtotal), widthChars))
+  if (resumen.descuento > 0) {
+    add(lineaIzqDer('Ahorro', `-${formatCurrency(resumen.descuento)}`, widthChars))
+  }
+  add(lineaIzqDer('Impuesto', formatCurrency(0), widthChars))
+  setBold(true)
+  add(lineaIzqDer('Total', formatCurrency(resumen.total), widthChars))
+  setBold(false)
+  add(lineaIzqDer('Recibido', formatCurrency(resumen.pagoRecibido), widthChars))
+  add(lineaIzqDer('Cambio', formatCurrency(resumen.cambio), widthChars))
+  hr()
+  setAlign(1)
+  add('Gracias por su compra')
+  bytes.push(0x0a, 0x0a, 0x0a)
+  bytes.push(0x1d, 0x56, 0x00)
+  return bytes
+}
+
+const pedirConfigImpresora = async () => {
+  const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p?: unknown) => Promise<unknown> } })
+    .ipcRenderer
+  if (!ipc?.invoke) return getPrinterConfig()
+  try {
+    const impresoras = (await ipc.invoke('pos:list-printers')) as Array<Record<string, unknown>>
+    if (!Array.isArray(impresoras) || impresoras.length === 0) return getPrinterConfig()
+    const opciones = impresoras.map((item, index) => `${index + 1}. ${String(item?.name ?? 'Impresora')}`)
+    const respuesta = window.prompt(
+      `Selecciona impresora:\n${opciones.join('\n')}\n\nEscribe el numero:`
+    )
+    const seleccion = Number(respuesta)
+    if (!Number.isFinite(seleccion) || seleccion < 1 || seleccion > impresoras.length) return getPrinterConfig()
+    const impresora = impresoras[seleccion - 1]
+    const sugerido =
+      inferirAnchoMm(impresora as { name?: string; options?: Record<string, unknown>; paperSize?: { width?: number } }) ??
+      80
+    const anchoRespuesta = window.prompt(
+      `Ancho de papel (58 o 80). Enter para usar ${sugerido}:`,
+      String(sugerido)
+    )
+    const anchoSeleccionado = Number(anchoRespuesta)
+    const widthMm = anchoSeleccionado === 58 || anchoSeleccionado === 80 ? anchoSeleccionado : sugerido
+    const metodoRespuesta = window.prompt('Metodo de impresion: 1) ESC/POS  2) HTML', '1')
+    const method = metodoRespuesta === '2' ? 'html' : 'escpos'
+    const nueva = {
+      deviceName: String(impresora?.name ?? ''),
+      widthMm: widthMm ?? 80,
+      silent: true,
+      scale: 1,
+      method
+    }
+    localStorage.setItem('pos_printer', JSON.stringify(nueva))
+    return nueva
+  } catch {
+    return getPrinterConfig()
+  }
+}
+
+const autoConfigImpresora = async () => {
+  const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p?: unknown) => Promise<unknown> } })
+    .ipcRenderer
+  if (!ipc?.invoke) return getPrinterConfig()
+  try {
+    const impresoras = (await ipc.invoke('pos:list-printers')) as Array<Record<string, unknown>>
+    if (!Array.isArray(impresoras) || impresoras.length === 0) return getPrinterConfig()
+    const objetivo =
+      impresoras.find((item) => Boolean(item?.isDefault)) ||
+      impresoras.find((item) => String(item?.name ?? '').toLowerCase().includes('pos')) ||
+      impresoras[0]
+    const widthMm =
+      inferirAnchoMm(objetivo as { name?: string; options?: Record<string, unknown>; paperSize?: { width?: number } }) ??
+      58
+    const nombreLower = String(objetivo?.name ?? '').toLowerCase()
+    const nueva = {
+      deviceName: String(objetivo?.name ?? ''),
+      widthMm,
+      silent: true,
+      scale: nombreLower.includes('ish-58') ? 1.4 : nombreLower.includes('pos-80c') ? 1.1 : 1.2,
+      method: 'escpos' as const
+    }
+    localStorage.setItem('pos_printer', JSON.stringify(nueva))
+    return nueva
+  } catch {
+    return getPrinterConfig()
+  }
+}
+
+const abrirCajonMonedero = async () => {
+  const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p: unknown) => Promise<void> } }).ipcRenderer
+  if (!ipc?.invoke) return
+  try {
+    const config = getPrinterConfig()
+    if (!config?.deviceName) return
+    await ipc.invoke('pos:open-cash-drawer', { deviceName: config.deviceName })
+  } catch (error) {
+    console.warn('No se pudo abrir el cajon monedero.', error)
+  }
+}
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+const construirHtmlTicket = (
+  items: ItemCarrito[],
+  resumen: { subtotal: number; descuento: number; total: number; pagoRecibido: number; cambio: number },
+  numeroFactura?: string,
+  widthMm = 80,
+  scale = 1
+) => {
+  const fecha = new Date().toLocaleString('es-CO')
+  const numero =
+    (numeroFactura?.trim() || numeroFacturaResumen.value?.trim())
+      ? (numeroFactura?.trim() || numeroFacturaResumen.value?.trim() || '')
+      : `POS-${ventaId.value}`
+  const clienteNombre = clienteSeleccionado.value?.nombre ?? 'Consumidor final'
+  const cajaNombre = getSessionCajaNombre() ?? `Caja ${DEFAULT_CAJA_ID}`
+  const usuarioNombre = getSessionUserName() ?? 'Usuario'
+  const nota = notaRapida.value?.trim() ? notaRapida.value.trim() : ''
+  const lineas = items.length
+    ? items
+        .map(
+          (item) => `
+        <div class="linea">
+          <div class="linea__nombre">${escapeHtml(item.nombre)}</div>
+          <div class="linea__meta">
+            <span>x${item.cantidad}</span>
+            <span>${formatCurrency(totalLinea(item))}</span>
+          </div>
+          <div class="linea__pu">P.U: ${formatCurrency(item.precio)}</div>
+
+        </div>`
+        )
+        .join('')
+    : '<div class="vacio">Sin productos aun</div>'
+
+  const ahorro =
+    resumen.descuento > 0
+      ? `<div class="fila"><span>Ahorro</span><span>-${formatCurrency(resumen.descuento)}</span></div>`
+      : ''
+
+  const scaleSeguro = Math.min(1.6, Math.max(0.7, Number(scale) || 1))
+  return `
+  <style>
+    @page { margin: 0; size: ${widthMm}mm auto; }
+    html, body { width: ${widthMm}mm; }
+    body { margin: 0; font-family: "Courier New", monospace; color: #111; zoom: ${scaleSeguro}; }
+    .ticket { padding: 10px 8px; width: 100%; box-sizing: border-box; }
+    .center { text-align: center; }
+    .titulo { font-weight: bold; font-size: 16px; }
+    .subtitulo { font-size: 12px; }
+    .fila { display: flex; justify-content: space-between; font-size: 12px; margin: 2px 0; }
+    .linea { margin: 6px 0; }
+    .linea__nombre { font-size: 12px; }
+    .linea__meta { display: flex; justify-content: space-between; font-size: 12px; }
+    .linea__pu { font-size: 11px; color: #444; margin-top: 2px; }
+    .separador { border-top: 1px dashed #111; margin: 8px 0; }
+    .total { font-weight: bold; font-size: 14px; }
+    .vacio { font-size: 12px; text-align: center; margin: 8px 0; }
+  </style>
+  <section class="ticket">
+    <div class="center titulo">AUTOSERVICIO EL PAISA</div>
+    <div class="center subtitulo">FACTURA DE VENTA</div>
+    <div class="separador"></div>
+    <div class="fila"><span>Factura</span><span>${escapeHtml(numero)}</span></div>
+    <div class="fila"><span>Fecha</span><span>${escapeHtml(fecha)}</span></div>
+    <div class="fila"><span>Cliente</span><span>${escapeHtml(clienteNombre)}</span></div>
+    <div class="fila"><span>Caja</span><span>${escapeHtml(cajaNombre)}</span></div>
+    <div class="fila"><span>Usuario</span><span>${escapeHtml(usuarioNombre)}</span></div>
+    <div class="fila"><span>Pago</span><span>${escapeHtml(formatoTipoPago(tipoPago.value))}</span></div>
+    ${nota ? `<div class="fila"><span>Nota</span><span>${escapeHtml(nota)}</span></div>` : ''}
+    <div class="separador"></div>
+    ${lineas}
+    <div class="separador"></div>
+    <div class="fila"><span>Subtotal</span><span>${formatCurrency(resumen.subtotal)}</span></div>
+    ${ahorro}
+    <div class="fila"><span>Impuesto</span><span>${formatCurrency(0)}</span></div>
+    <div class="fila total"><span>Total</span><span>${formatCurrency(resumen.total)}</span></div>
+    <div class="fila"><span>Recibido</span><span>${formatCurrency(resumen.pagoRecibido)}</span></div>
+    <div class="fila"><span>Cambio</span><span>${formatCurrency(resumen.cambio)}</span></div>
+    <div class="separador"></div>
+    <div class="center subtitulo">Gracias por su compra</div>
+  </section>`
+}
+
+const imprimirTicket = async () => {
+  const resumen = {
+    subtotal: resumenCarrito.value.subtotalBruto,
+    descuento: resumenCarrito.value.descuentoLineas,
+    total: resumenCarrito.value.total,
+    pagoRecibido: Number(pagoRecibido.value || 0),
+    cambio: resumenCarrito.value.cambio
+  }
+  const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p: unknown) => Promise<void> } }).ipcRenderer
+  if (!ipc?.invoke) {
+    const html = construirHtmlTicket(
+      carrito.value,
+      resumen,
+      numeroFacturaResumen.value,
+      80,
+      1
+    )
+    const w = window.open('', '_blank', 'noopener,noreferrer')
+    if (w) {
+      w.document.open()
+      w.document.write(`<!doctype html><html><head><title>Ticket</title></head><body>${html}</body></html>`)
+      w.document.close()
+      w.focus()
+      w.print()
+    } else {
+      window.alert('No se pudo abrir la ventana de impresion. Revisa el bloqueo de popups.')
+    }
+    return
+  }
+
+  let config = await resolverConfigImpresora()
+  if (!config?.deviceName) {
+    config = await autoConfigImpresora()
+  }
+  if (!config?.deviceName) {
+    config = await pedirConfigImpresora()
+  }
+  if (!config?.deviceName) {
+    window.alert('Configura la impresora POS antes de imprimir.')
+    return
+  }
+  try {
+    const bytes = construirBytesEscPos(
+      carrito.value,
+      resumen,
+      numeroFacturaResumen.value,
+      config?.widthMm ?? 80,
+      config?.scale ?? 1
+    )
+    await ipc.invoke('pos:print-raw', { deviceName: config.deviceName, bytes })
+    return
+  } catch (error) {
+    console.warn('Impresion ESC/POS fallida.', error)
+    window.alert('No se pudo imprimir en la POS. Revisa la impresora y la configuracion.')
+  }
 }
 
 const formatoTipoPago = (tipo: string) => {
@@ -896,7 +1374,7 @@ const formatoTipoPago = (tipo: string) => {
   return 'Efectivo'
 }
 
-const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.value, numeroFactura?: string) => {
+const generarDocTicket = (items: ItemCarrito[], resumen: ResumenCobro, numeroFactura?: string) => {
   const fecha = new Date()
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const margin = 40
@@ -907,7 +1385,11 @@ const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.val
   const nombreWidth = pageWidth - margin * 2 - 90
   let y = margin
 
-  doc.setFont('courier', 'normal')
+  try {
+    doc.setFont('courier', 'normal')
+  } catch {
+    doc.setFont('helvetica', 'normal')
+  }
   doc.setFontSize(16)
   doc.text('AUTOSERVICIO EL PAISA', pageWidth / 2, y, { align: 'center' })
   y += lineHeight
@@ -915,7 +1397,10 @@ const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.val
   doc.text('FACTURA DE VENTA', pageWidth / 2, y, { align: 'center' })
   y += lineHeight
   doc.setFontSize(10)
-  const numero = numeroFactura?.trim() ? numeroFactura.trim() : `POS-${ventaId.value}`
+  const numero =
+    (numeroFactura?.trim() || numeroFacturaResumen.value?.trim())
+      ? (numeroFactura?.trim() || numeroFacturaResumen.value?.trim() || '')
+      : `POS-${ventaId.value}`
   doc.text(`Factura: ${numero}`, margin, y)
   y += lineHeight
   doc.text(`Fecha: ${fecha.toLocaleString('es-CO')}`, margin, y)
@@ -957,6 +1442,14 @@ const generarDocTicket = (items: ItemCarrito[], resumen: typeof resumenCobro.val
         }
         doc.text(nombreLineas[i], margin, y)
       }
+      y += lineHeight
+      if (y + lineHeight > pageHeight - margin) {
+        doc.addPage()
+        y = margin
+      }
+      doc.setFontSize(9)
+      doc.text(`P.U: ${formatCurrency(item.precio)}`, margin, y)
+      doc.setFontSize(10)
       y += lineHeight
     })
   }
@@ -1004,15 +1497,63 @@ const guardarTicket = () => {
 }
 
 const guardarTicketResumen = () => {
-  const doc = generarDocTicket(reciboItems.value, resumenCobro.value, numeroFacturaResumen.value)
+  const doc = generarDocTicket(
+    reciboItems.value,
+    resumenCobro.value,
+    numeroFacturaResumen.value || resumenCobro.value.numeroFactura
+  )
   const sello = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
   doc.save(`ticket-${sello}.pdf`)
 }
 
-const imprimirTicketResumen = () => {
-  const doc = generarDocTicket(reciboItems.value, resumenCobro.value, numeroFacturaResumen.value)
-  doc.autoPrint()
-  doc.output('dataurlnewwindow')
+const imprimirTicketResumen = async () => {
+  const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p: unknown) => Promise<void> } }).ipcRenderer
+  if (!ipc?.invoke) {
+    const html = construirHtmlTicket(
+      reciboItems.value,
+      resumenCobro.value,
+      numeroFacturaResumen.value || resumenCobro.value.numeroFactura,
+      80,
+      1
+    )
+    const w = window.open('', '_blank', 'noopener,noreferrer')
+    if (w) {
+      w.document.open()
+      w.document.write(`<!doctype html><html><head><title>Ticket</title></head><body>${html}</body></html>`)
+      w.document.close()
+      w.focus()
+      w.print()
+    } else {
+      window.alert('No se pudo abrir la ventana de impresion. Revisa el bloqueo de popups.')
+    }
+    return
+  }
+
+  let config = await resolverConfigImpresora()
+  if (!config?.deviceName) {
+    config = await autoConfigImpresora()
+  }
+  if (!config?.deviceName) {
+    config = await pedirConfigImpresora()
+  }
+  if (!config?.deviceName) {
+    window.alert('Configura la impresora POS antes de imprimir.')
+    return
+  }
+  try {
+    const bytes = construirBytesEscPos(
+      reciboItems.value,
+      resumenCobro.value,
+      numeroFacturaResumen.value || resumenCobro.value.numeroFactura,
+      config?.widthMm ?? 80,
+      config?.scale ?? 1
+    )
+    await ipc.invoke('pos:print-raw', { deviceName: config.deviceName, bytes })
+    return
+  } catch (error) {
+    console.warn('Impresion ESC/POS fallida.', error)
+    window.alert('No se pudo imprimir en la POS. Revisa la impresora y la configuracion.')
+  }
 }
 </script>
 
@@ -1375,6 +1916,25 @@ const imprimirTicketResumen = () => {
     </div>
 
     <div
+      v-if="mostrarPayloadVenta"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="mostrarPayloadVenta = false"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Payload enviado</h2>
+          <button type="button" class="modal__cerrar" @click="mostrarPayloadVenta = false">x</button>
+        </div>
+        <pre class="payload">{{ payloadVentaTexto }}</pre>
+        <div class="modal__acciones">
+          <button type="button" class="boton secundaria" @click="mostrarPayloadVenta = false">Cerrar</button>
+        </div>
+      </section>
+    </div>
+
+    <div
       v-if="mostrarResumenCobro"
       class="modal"
       role="dialog"
@@ -1388,6 +1948,7 @@ const imprimirTicketResumen = () => {
           <h2>Resumen de cobro</h2>
           <button type="button" class="modal__cerrar" @click="mostrarResumenCobro = false">x</button>
         </div>
+        <p class="modal__mensaje">Venta guardada correctamente.</p>
         <div class="cobro-input">
           <label>Pago recibido</label>
           <input
@@ -2301,6 +2862,12 @@ const imprimirTicketResumen = () => {
   display: flex;
   justify-content: flex-end;
   margin-top: 0.9rem;
+}
+
+.modal__mensaje {
+  margin: 0 0 0.75rem;
+  color: #a7f3d0;
+  font-weight: 600;
 }
 
 .modal__cerrar {

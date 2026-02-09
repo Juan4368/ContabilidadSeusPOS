@@ -2,6 +2,7 @@
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ENDPOINTS } from '../config/endpoints'
+import { nowUTCMinus5Iso } from '../utils/time'
 
 type Producto = {
   id: number
@@ -455,7 +456,7 @@ const guardarEdicionFila = async (producto: Producto) => {
     return
   }
 
-  const actualizado = new Date().toISOString()
+  const actualizado = nowUTCMinus5Iso()
   const payload = {
     codigo_barras: codigoBarras,
     nombre,
@@ -510,7 +511,7 @@ const toggleEstado = async (id: number) => {
   const estadoAnterior = item.estado
   const nuevoEstado = item.estado === 'activo' ? 'inactivo' : 'activo'
   item.estado = nuevoEstado
-  item.fechaActualizacion = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  item.fechaActualizacion = nowUTCMinus5Iso().slice(0, 16).replace('T', ' ')
 
   const payload = { estado: nuevoEstado === 'activo' }
   const payloadCompleto = {

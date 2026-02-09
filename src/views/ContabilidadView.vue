@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { crearMovimientoFinanciero, type MovimientoFinancieroPayload } from '../services/movimientosFinancieros'
 import { ENDPOINTS } from '../config/endpoints'
 import { getSessionUserId } from '../utils/session'
+import { fromLocalInputToUTCMinus5Iso, toLocalInputUTCMinus5 } from '../utils/time'
 
 const resumen = [
   { titulo: 'Ingresos', valor: '$ 0', detalle: 'Mes actual', estado: 'estable' },
@@ -34,6 +35,22 @@ type Proveedor = {
   nombre: string
 }
 
+type MovimientoEgreso = {
+  id: number
+  fecha: string
+  fecha_dia_hora?: string
+  monto: string
+  concepto: string
+  nota: string
+  proveedor_nombre?: string
+  proveedor_id?: number | null
+  caja_id?: number | null
+  usuario_id?: number | null
+  usuario_nombre?: string
+  venta_id?: number | null
+  tipo?: string
+}
+
 const categoriasContables = ref<CategoriaContable[]>([])
 const cargandoCategorias = ref(false)
 const errorCategorias = ref<string | null>(null)
@@ -43,15 +60,30 @@ const cargandoProveedores = ref(false)
 const errorProveedores = ref<string | null>(null)
 const ultimaCargaProveedores = ref(0)
 
-const toDateTimeLocal = (fecha: Date) => {
-  const pad = (valor: number) => valor.toString().padStart(2, '0')
-  return `${fecha.getFullYear()}-${pad(fecha.getMonth() + 1)}-${pad(fecha.getDate())}T${pad(
-    fecha.getHours()
-  )}:${pad(fecha.getMinutes())}`
-}
+const egresos = ref<MovimientoEgreso[]>([])
+const cargandoEgresos = ref(false)
+const errorEgresos = ref<string | null>(null)
+const editandoEgreso = ref<MovimientoEgreso | null>(null)
+const filtroFechaDesde = ref('')
+const filtroFechaHasta = ref('')
+const filtroProveedorId = ref(0)
+const editandoEgresoForm = ref({
+  fecha: toLocalInputUTCMinus5(new Date()),
+  tipo: 'EGRESO',
+  monto: 0,
+  concepto: '',
+  nota: '',
+  proveedor_id: 0,
+  caja_id: 0,
+  usuario_id: 0,
+  venta_id: 0
+})
+const guardandoEgreso = ref(false)
+const eliminandoEgreso = ref<number | null>(null)
+const actualizandoMovimiento = ref<number | null>(null)
 
 const formularioMovimiento = ref<MovimientoFinancieroPayload>({
-  fecha: toDateTimeLocal(new Date()),
+  fecha: toLocalInputUTCMinus5(new Date()),
   tipo: 'EGRESO',
   monto: 0,
   concepto: '',
@@ -69,6 +101,32 @@ const formatCurrencyInput = (valor: number) =>
   })
 
 const montoMovimientoInput = computed(() => formatCurrencyInput(formularioMovimiento.value.monto))
+
+const formatearMoneda = (valor: string | number) => {
+  const numero = Number(valor ?? 0)
+  return Number.isFinite(numero)
+    ? numero.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })
+    : String(valor)
+}
+
+const totalEgresos = computed(() =>
+  egresos.value.reduce((total, item) => total + Number(item.monto ?? 0), 0)
+)
+
+const egresosFiltrados = computed(() => {
+  const desde = filtroFechaDesde.value ? new Date(`${filtroFechaDesde.value}T00:00:00`) : null
+  const hasta = filtroFechaHasta.value ? new Date(`${filtroFechaHasta.value}T23:59:59`) : null
+  const proveedorId = Number(filtroProveedorId.value || 0)
+
+  return egresos.value.filter((item) => {
+    const fechaRaw = item.fecha_dia_hora || item.fecha
+    const fecha = fechaRaw ? new Date(fechaRaw) : null
+    if (desde && (!fecha || fecha < desde)) return false
+    if (hasta && (!fecha || fecha > hasta)) return false
+    if (proveedorId > 0 && Number(item.proveedor_id ?? 0) !== proveedorId) return false
+    return true
+  })
+})
 
 const actualizarMontoMovimiento = (event: Event) => {
   const value = (event.target as HTMLInputElement).value
@@ -103,15 +161,7 @@ const registrarMovimiento = async () => {
     guardandoMovimiento.value = false
     return
   }
-  const fechaBase = formularioMovimiento.value.fecha
-  const fechaNormalizada = fechaBase.length === 16 ? `${fechaBase}:00` : fechaBase
-  const fechaObjeto = new Date(fechaNormalizada)
-  if (Number.isNaN(fechaObjeto.getTime())) {
-    errorMovimiento.value = 'Fecha invalida.'
-    guardandoMovimiento.value = false
-    return
-  }
-  const fechaIso = fechaObjeto.toISOString()
+  const fechaIso = fromLocalInputToUTCMinus5Iso(formularioMovimiento.value.fecha)
   const ventaId = formularioMovimiento.value.venta_id
   const payload: MovimientoFinancieroPayload = {
     ...formularioMovimiento.value,
@@ -135,15 +185,171 @@ const registrarMovimiento = async () => {
     mensaje.value = 'No fue posible guardar el movimiento.'
     mensajeTipo.value = 'error'
   } finally {
-    payloadMovimiento.value = JSON.stringify(payload, null, 2)
+    payloadMovimiento.value = null
     guardandoMovimiento.value = false
   }
 }
 
+const cargarEgresos = async () => {
+  cargandoEgresos.value = true
+  errorEgresos.value = null
+  try {
+    const respuesta = await fetch(`${ENDPOINTS.CONTABILIDAD_MOVIMIENTOS}?tipo=EGRESO`)
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json()) as unknown
+    const lista = (Array.isArray(data)
+      ? data
+      : Array.isArray((data as Record<string, unknown>)?.results)
+        ? (data as Record<string, unknown>).results
+        : Array.isArray((data as Record<string, unknown>)?.data)
+          ? (data as Record<string, unknown>).data
+          : []) as unknown[]
+    egresos.value = lista
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const raw = item as Record<string, unknown>
+        return {
+          id: Number(raw.id ?? 0),
+          fecha: String(raw.fecha ?? ''),
+          fecha_dia_hora: raw.fecha_dia_hora ? String(raw.fecha_dia_hora) : undefined,
+          monto: String(raw.monto ?? '0'),
+          concepto: String(raw.concepto ?? ''),
+          nota: String(raw.nota ?? ''),
+          proveedor_nombre: raw.proveedor_nombre ? String(raw.proveedor_nombre) : undefined,
+          proveedor_id: raw.proveedor_id ? Number(raw.proveedor_id) : null,
+          caja_id: raw.caja_id ? Number(raw.caja_id) : null,
+          usuario_id: raw.usuario_id ? Number(raw.usuario_id) : null,
+          usuario_nombre: raw.usuario_nombre ? String(raw.usuario_nombre) : undefined,
+          venta_id: raw.venta_id ? Number(raw.venta_id) : null,
+          tipo: raw.tipo ? String(raw.tipo) : undefined
+        } as MovimientoEgreso
+      })
+      .filter(Boolean) as MovimientoEgreso[]
+    resumen[1].valor = formatearMoneda(totalEgresos.value)
+  } catch (err) {
+    const detalle = err instanceof Error ? err.message : String(err)
+    errorEgresos.value = `No fue posible cargar egresos. ${detalle}`
+  } finally {
+    cargandoEgresos.value = false
+  }
+}
+
+const abrirEditarEgreso = (item: MovimientoEgreso) => {
+  editandoEgreso.value = item
+  editandoEgresoForm.value = {
+    fecha: toLocalInputUTCMinus5(new Date(item.fecha || new Date().toISOString())),
+    tipo: item.tipo || 'EGRESO',
+    monto: Number(item.monto ?? 0),
+    concepto: item.concepto || '',
+    nota: item.nota || '',
+    proveedor_id: Number(item.proveedor_id ?? 0),
+    caja_id: Number(item.caja_id ?? 0),
+    usuario_id: Number(item.usuario_id ?? getSessionUserId() ?? 0),
+    venta_id: Number(item.venta_id ?? 0)
+  }
+}
+
+const cerrarEditarEgreso = () => {
+  editandoEgreso.value = null
+}
+
+const guardarEditarEgreso = async () => {
+  if (!editandoEgreso.value) return
+  guardandoEgreso.value = true
+  try {
+    const payload = {
+      fecha: fromLocalInputToUTCMinus5Iso(editandoEgresoForm.value.fecha),
+      tipo: editandoEgresoForm.value.tipo,
+      monto: Number(editandoEgresoForm.value.monto || 0),
+      concepto: editandoEgresoForm.value.concepto,
+      nota: editandoEgresoForm.value.nota,
+      proveedor_id: Number(editandoEgresoForm.value.proveedor_id || 0),
+      caja_id: Number(editandoEgresoForm.value.caja_id || 0),
+      usuario_id: Number(editandoEgresoForm.value.usuario_id || 0),
+      venta_id: Number(editandoEgresoForm.value.venta_id || 0)
+    }
+    const respuesta = await fetch(`${ENDPOINTS.CONTABILIDAD_MOVIMIENTOS}${editandoEgreso.value.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    await cargarEgresos()
+    cerrarEditarEgreso()
+  } catch (err) {
+    const detalle = err instanceof Error ? err.message : String(err)
+    errorEgresos.value = `No fue posible actualizar egreso. ${detalle}`
+  } finally {
+    guardandoEgreso.value = false
+  }
+}
+
+const eliminarEgreso = async (item: MovimientoEgreso) => {
+  if (!item?.id) return
+  const confirmar = window.confirm('¿Eliminar este egreso?')
+  if (!confirmar) return
+  eliminandoEgreso.value = item.id
+  try {
+    const respuesta = await fetch(`${ENDPOINTS.CONTABILIDAD_MOVIMIENTOS}${item.id}`, { method: 'DELETE' })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    egresos.value = egresos.value.filter((registro) => registro.id !== item.id)
+    resumen[1].valor = formatearMoneda(totalEgresos.value)
+  } catch (err) {
+    const detalle = err instanceof Error ? err.message : String(err)
+    errorEgresos.value = `No fue posible eliminar egreso. ${detalle}`
+  } finally {
+    eliminandoEgreso.value = null
+  }
+}
+
+const actualizarMovimiento = async (item: MovimientoEgreso) => {
+  if (!item?.id) return
+  actualizandoMovimiento.value = item.id
+  try {
+    const payload = {
+      fecha: item.fecha || new Date().toISOString(),
+      tipo: (item.tipo || 'EGRESO') as 'EGRESO' | 'INGRESO',
+      monto: Number(item.monto ?? 0),
+      concepto: item.concepto || '',
+      nota: item.nota || '',
+      proveedor_id: Number(item.proveedor_id ?? 0),
+      caja_id: Number(item.caja_id ?? 0),
+      usuario_id: Number(item.usuario_id ?? getSessionUserId() ?? 0),
+      venta_id: item.venta_id ? Number(item.venta_id) : 0
+    }
+    const respuesta = await fetch(`${ENDPOINTS.CONTABILIDAD_MOVIMIENTOS}${item.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    await cargarEgresos()
+  } catch (err) {
+    console.error('Error al actualizar movimiento', err)
+    const detalle = err instanceof Error ? err.message : String(err)
+    errorEgresos.value = `No fue posible actualizar el movimiento. ${detalle}`
+  } finally {
+    actualizandoMovimiento.value = null
+  }
+}
+
+
 const cerrarFormularioMovimiento = () => {
   mostrarFormularioMovimiento.value = false
   formularioMovimiento.value = {
-    fecha: toDateTimeLocal(new Date()),
+    fecha: toLocalInputUTCMinus5(new Date()),
     tipo: 'EGRESO',
     monto: 0,
     concepto: '',
@@ -251,7 +457,7 @@ const abrirFormularioMovimiento = () => {
   cargarProveedores()
   cargarCategoriasContables()
   formularioMovimiento.value = {
-    fecha: toDateTimeLocal(new Date()),
+    fecha: toLocalInputUTCMinus5(new Date()),
     tipo: 'EGRESO',
     monto: 0,
     concepto: '',
@@ -347,19 +553,22 @@ const cerrarFormularioCategoria = () => {
 onMounted(() => {
   cargarProveedores()
   cargarCategoriasContables()
+  cargarEgresos()
 })
 </script>
 
 <template>
   <main class="contabilidad">
     <section class="contabilidad__resumen">
-      <article v-for="item in resumen" :key="item.titulo" class="tarjeta">
+      <article class="tarjeta">
         <div>
-          <p class="tarjeta__titulo">{{ item.titulo }}</p>
-          <p class="tarjeta__valor">{{ item.valor }}</p>
-          <p class="tarjeta__detalle">{{ item.detalle }}</p>
+          <p class="tarjeta__titulo">{{ resumen[1].titulo }}</p>
+          <p class="tarjeta__valor">{{ resumen[1].valor }}</p>
+          <p class="tarjeta__detalle">{{ resumen[1].detalle }}</p>
         </div>
-        <span :class="['tarjeta__estado', `tarjeta__estado--${item.estado}`]">{{ item.estado }}</span>
+        <span :class="['tarjeta__estado', `tarjeta__estado--${resumen[1].estado}`]">
+          {{ resumen[1].estado }}
+        </span>
       </article>
     </section>
 
@@ -380,6 +589,155 @@ onMounted(() => {
         </div>
       </article>
     </section>
+
+    <section class="tabla tabla--modulo">
+      <div class="tabla__encabezado">
+        <div class="tabla__titulo">
+          <h2>Egresos</h2>
+          <p class="tabla__nota">Filtra por fecha y proveedor.</p>
+        </div>
+        <div class="tabla__filtros">
+          <label>
+            <span>Desde</span>
+            <input v-model="filtroFechaDesde" type="date" />
+          </label>
+          <label>
+            <span>Hasta</span>
+            <input v-model="filtroFechaHasta" type="date" />
+          </label>
+          <label>
+            <span>Proveedor</span>
+            <select v-model.number="filtroProveedorId" :disabled="cargandoProveedores">
+              <option :value="0">Todos</option>
+              <option v-for="proveedor in proveedores" :key="proveedor.id" :value="proveedor.id">
+                {{ proveedor.nombre }}
+              </option>
+            </select>
+          </label>
+          <button type="button" class="boton secundario" @click="cargarEgresos" :disabled="cargandoEgresos">
+            {{ cargandoEgresos ? 'Actualizando...' : 'Actualizar' }}
+          </button>
+        </div>
+      </div>
+      <p v-if="errorEgresos" class="error">{{ errorEgresos }}</p>
+      <div v-if="!cargandoEgresos && egresos.length === 0" class="vacio">Sin egresos.</div>
+      <table v-else class="tabla__grid">
+        <colgroup>
+          <col style="width: 13%" />
+          <col style="width: 17%" />
+          <col style="width: 15%" />
+          <col style="width: 20%" />
+          <col style="width: 9%" />
+          <col style="width: 8%" />
+          <col style="width: 9%" />
+          <col style="width: 9%" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Proveedor</th>
+            <th>Concepto</th>
+            <th>Nota</th>
+            <th>Monto</th>
+            <th>Caja</th>
+            <th>Usuario</th>
+            <th class="th-accion">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in egresosFiltrados" :key="item.id">
+            <td>{{ item.fecha_dia_hora || item.fecha }}</td>
+            <td>{{ item.proveedor_nombre || '-' }}</td>
+            <td>{{ item.concepto || '-' }}</td>
+            <td>{{ item.nota || '-' }}</td>
+            <td class="col-num">{{ formatearMoneda(item.monto) }}</td>
+            <td class="col-centro">{{ item.caja_id ?? '-' }}</td>
+            <td class="col-centro">{{ item.usuario_nombre || '-' }}</td>
+            <td class="col-accion">
+              <div class="acciones-tabla">
+                <button type="button" class="accion-btn accion-btn--edit" @click="abrirEditarEgreso(item)" title="Editar">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M4 17.5V20h2.5L18.8 7.7l-2.5-2.5L4 17.5zM20.7 5.3a1 1 0 0 0 0-1.4l-1.6-1.6a1 1 0 0 0-1.4 0l-1.2 1.2 2.5 2.5 1.7-1.7z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div
+      v-if="editandoEgreso"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      @click.self="cerrarEditarEgreso"
+    >
+      <section class="contabilidad__formulario" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Editar egreso</h2>
+          <button type="button" class="modal__cerrar" @click="cerrarEditarEgreso">x</button>
+        </div>
+        <form class="form" @submit.prevent="guardarEditarEgreso">
+          <label>
+            <span>Fecha</span>
+            <input v-model="editandoEgresoForm.fecha" type="datetime-local" step="60" required />
+          </label>
+          <label>
+            <span>Tipo</span>
+            <select v-model="editandoEgresoForm.tipo" required>
+              <option value="EGRESO">EGRESO</option>
+              <option value="INGRESO">INGRESO</option>
+            </select>
+          </label>
+          <label>
+            <span>Monto</span>
+            <input v-model.number="editandoEgresoForm.monto" type="number" min="0" step="1" required />
+          </label>
+          <label>
+            <span>Concepto</span>
+            <input v-model="editandoEgresoForm.concepto" type="text" placeholder="Concepto" />
+          </label>
+          <label>
+            <span>Nota</span>
+            <input v-model="editandoEgresoForm.nota" type="text" placeholder="Nota" />
+          </label>
+          <label>
+            <span>Proveedor</span>
+            <select v-model.number="editandoEgresoForm.proveedor_id" :disabled="cargandoProveedores">
+              <option :value="0">Sin proveedor</option>
+              <option v-for="proveedor in proveedores" :key="proveedor.id" :value="proveedor.id">
+                {{ proveedor.nombre }}
+              </option>
+            </select>
+          </label>
+          <label>
+            <span>Caja</span>
+            <input v-model.number="editandoEgresoForm.caja_id" type="number" min="0" step="1" />
+          </label>
+          <label>
+            <span>Usuario</span>
+            <input v-model.number="editandoEgresoForm.usuario_id" type="number" min="0" step="1" />
+          </label>
+          <label>
+            <span>Venta ID</span>
+            <input v-model.number="editandoEgresoForm.venta_id" type="number" min="0" step="1" />
+          </label>
+          <div class="modal__acciones">
+            <button type="submit" class="boton" :disabled="guardandoEgreso">
+              {{ guardandoEgreso ? 'Guardando...' : 'Guardar' }}
+            </button>
+            <button type="button" class="boton secundario" @click="cerrarEditarEgreso">Cancelar</button>
+          </div>
+          <p v-if="errorEgresos" class="form__error">{{ errorEgresos }}</p>
+        </form>
+      </section>
+    </div>
+
 
     <div
       v-if="mostrarFormularioMovimiento"
@@ -468,7 +826,6 @@ onMounted(() => {
           </button>
           <p v-if="errorMovimiento" class="form__error">{{ errorMovimiento }}</p>
           <p v-if="mensaje" :class="['form__mensaje', `form__mensaje--${mensajeTipo}`]">{{ mensaje }}</p>
-          <pre v-if="payloadMovimiento" class="payload">{{ payloadMovimiento }}</pre>
         </form>
       </section>
     </div>
@@ -567,8 +924,12 @@ onMounted(() => {
 
 .contabilidad__resumen {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: minmax(220px, 1fr);
   gap: 0.9rem;
+}
+
+.contabilidad__resumen .tarjeta {
+  max-width: 12.5%;
 }
 
 .tarjeta {
@@ -624,6 +985,165 @@ onMounted(() => {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 1rem;
 }
+
+.tabla {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tabla--modulo {
+  padding: 0.75rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(13, 15, 20, 0.88);
+  overflow-x: auto;
+}
+
+.tabla__encabezado {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.tabla__grid {
+  width: 100%;
+  border-collapse: collapse;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  table-layout: fixed;
+  min-width: 1100px;
+}
+
+.tabla__grid thead th {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #94a3b8;
+  background: rgba(15, 18, 26, 0.95);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.tabla__encabezado {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.tabla__titulo h2 {
+  margin: 0;
+}
+
+.tabla__nota {
+  margin: 0.2rem 0 0;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.tabla__filtros {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.tabla__filtros label {
+  display: grid;
+  gap: 0.3rem;
+  color: #e2e8f0;
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+.tabla__filtros input,
+.tabla__filtros select {
+  border-radius: 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(10, 12, 18, 0.9);
+  color: #e2e8f0;
+  padding: 0.35rem 0.55rem;
+  min-width: 150px;
+}
+
+.th-accion {
+  text-align: center;
+}
+
+.col-accion {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.acciones-tabla {
+  display: inline-flex;
+  gap: 0.45rem;
+}
+
+.accion-btn {
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(12, 14, 20, 0.92);
+  color: #e2e8f0;
+  border-radius: 0.7rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.accion-btn svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  display: block;
+  fill: currentColor;
+}
+
+.accion-btn:hover:not(:disabled),
+.accion-btn:focus-visible:not(:disabled) {
+  border-color: rgba(250, 204, 21, 0.55);
+  background: rgba(250, 204, 21, 0.12);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.accion-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.accion-btn--edit {
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #bfdbfe;
+}
+
+
+.tabla__grid tbody td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(13, 15, 20, 0.9);
+}
+
+.tabla__grid tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.col-centro {
+  text-align: center;
+}
+
 
 .accion {
   display: flex;

@@ -7,6 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:electron": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:VITE_DEV_SERVER_URL='http://localhost:5173'; npx electron .\"",
+    "dev:app": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process powershell -ArgumentList ' -NoProfile -ExecutionPolicy Bypass -Command npm run dev'; Start-Sleep -Seconds 2; $env:VITE_DEV_SERVER_URL='http://localhost:5173'; npx electron .\"",
     "build": "vue-tsc && vite build && electron-builder",
     "preview": "vite preview"
   },

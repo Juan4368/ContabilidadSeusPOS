@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, reactive, ref } from 'vue'
+import { nowUTCMinus5Iso } from '../utils/time'
 
 type StockItem = {
   id: number
@@ -137,12 +138,12 @@ const formatearFecha = (valor: string) => valor
 const ajustarStock = (item: StockItem, delta: number) => {
   const nuevo = Math.max(item.stock + delta, 0)
   item.stock = nuevo
-  item.actualizado = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  item.actualizado = nowUTCMinus5Iso().slice(0, 16).replace('T', ' ')
 }
 
 const setStock = (item: StockItem, valor: number) => {
   item.stock = Math.max(valor, 0)
-  item.actualizado = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  item.actualizado = nowUTCMinus5Iso().slice(0, 16).replace('T', ' ')
 }
 </script>
 

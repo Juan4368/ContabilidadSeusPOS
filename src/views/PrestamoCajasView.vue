@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ENDPOINTS } from '../config/endpoints'
 import { getSessionUserName } from '../utils/session'
+import { fromLocalInputToUTCMinus5Iso, toLocalInputUTCMinus5 } from '../utils/time'
 
 type PrestamoCaja = {
   id: number
@@ -45,16 +46,6 @@ const prestamosFiltrados = computed(() => {
   if (!termino) return prestamos.value
   return prestamos.value.filter((item) => item.nombre.toLowerCase().includes(termino))
 })
-
-const fechaUtcMinus5 = () => {
-  const ahora = new Date()
-  const utc = ahora.getTime() + ahora.getTimezoneOffset() * 60000
-  const utcMinus5 = new Date(utc - 5 * 60 * 60000)
-  const pad = (num: number) => num.toString().padStart(2, '0')
-  return `${utcMinus5.getFullYear()}-${pad(utcMinus5.getMonth() + 1)}-${pad(utcMinus5.getDate())}T${pad(
-    utcMinus5.getHours()
-  )}:${pad(utcMinus5.getMinutes())}`
-}
 
 const formatFechaCorta = (valor: string) => {
   const fecha = new Date(valor)
@@ -141,9 +132,7 @@ const crearPrestamo = async () => {
     if (formCrear.value.cantidad_cajas <= 0) {
       throw new Error('La cantidad debe ser mayor a cero.')
     }
-    const fechaBase = formCrear.value.fecha
-    const fechaNormalizada = fechaBase.length === 16 ? `${fechaBase}:00` : fechaBase
-    const fechaIso = fechaNormalizada ? new Date(fechaNormalizada).toISOString() : new Date().toISOString()
+    const fechaIso = fromLocalInputToUTCMinus5Iso(formCrear.value.fecha)
     const payload = {
       nombre: formCrear.value.nombre.trim(),
       cantidad_cajas: Number(formCrear.value.cantidad_cajas),
@@ -179,7 +168,7 @@ const crearPrestamo = async () => {
       nombre: '',
       cantidad_cajas: 0,
       entregado: false,
-      fecha: fechaUtcMinus5()
+      fecha: toLocalInputUTCMinus5(new Date())
     }
     mostrarCrear.value = false
     await cargarPrestamos()
@@ -197,7 +186,7 @@ const iniciarEdicion = (item: PrestamoCaja) => {
     nombre: item.nombre,
     cantidad_cajas: item.cantidad_cajas,
     entregado: item.entregado,
-    fecha: item.fecha ? item.fecha.slice(0, 16) : fechaUtcMinus5()
+    fecha: item.fecha ? item.fecha.slice(0, 16) : toLocalInputUTCMinus5(new Date())
   }
 }
 
@@ -216,9 +205,7 @@ const guardarEdicion = async () => {
     if (formEditar.value.cantidad_cajas <= 0) {
       throw new Error('La cantidad debe ser mayor a cero.')
     }
-    const fechaBase = formEditar.value.fecha
-    const fechaNormalizada = fechaBase.length === 16 ? `${fechaBase}:00` : fechaBase
-    const fechaIso = fechaNormalizada ? new Date(fechaNormalizada).toISOString() : new Date().toISOString()
+    const fechaIso = fromLocalInputToUTCMinus5Iso(formEditar.value.fecha)
     const payload = {
       nombre: formEditar.value.nombre.trim(),
       cantidad_cajas: Number(formEditar.value.cantidad_cajas),
@@ -262,7 +249,7 @@ const eliminarPrestamo = async (item: PrestamoCaja) => {
 }
 
 onMounted(() => {
-  formCrear.value.fecha = fechaUtcMinus5()
+  formCrear.value.fecha = toLocalInputUTCMinus5(new Date())
   void cargarPrestamos()
 })
 </script>
@@ -338,7 +325,12 @@ onMounted(() => {
                 aria-label="Editar"
                 title="Editar"
               >
-                ✏
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M3 17.2V21h3.8l11-11-3.8-3.8-11 11zm17.7-10.5c.4-.4.4-1 0-1.4l-2.5-2.5c-.4-.4-1-.4-1.4 0l-2 2 3.8 3.8 2.1-1.9z"
+                    fill="currentColor"
+                  />
+                </svg>
               </button>
               <button
                 type="button"
@@ -347,7 +339,12 @@ onMounted(() => {
                 aria-label="Eliminar"
                 title="Eliminar"
               >
-                🗑
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M6 7h12l-1 14H7L6 7zm4-3h4l1 2H9l1-2z"
+                    fill="currentColor"
+                  />
+                </svg>
               </button>
             </td>
           </tr>
@@ -600,6 +597,11 @@ onMounted(() => {
   cursor: pointer;
   font-size: 1rem;
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.05);
+}
+
+.icono svg {
+  width: 1.05rem;
+  height: 1.05rem;
 }
 
 .icono--editar {

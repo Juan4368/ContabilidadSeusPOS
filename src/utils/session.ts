@@ -32,6 +32,19 @@ export const getSessionUserName = (): string | null => {
   }
 }
 
+export const getSessionCajaNombre = (): string | null => {
+  try {
+    const raw = localStorage.getItem('pos_sesion')
+    if (!raw) return null
+    const data = JSON.parse(raw) as { cajaNombre?: string | null; cajaId?: number | null }
+    if (data?.cajaNombre) return String(data.cajaNombre)
+    if (data?.cajaId) return `Caja ${data.cajaId}`
+    return null
+  } catch {
+    return null
+  }
+}
+
 const parseJwt = (token: string): Record<string, unknown> | null => {
   try {
     const payload = token.split('.')[1]

@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { ENDPOINTS } from '../config/endpoints'
+import { nowUTCMinus5Iso } from '../utils/time'
 
 type PendingItem = {
   id: number
@@ -118,7 +119,7 @@ const agregarPendienteOffline = (payload: Record<string, unknown>) => {
     clientesMap.get(clienteIdStr) ??
     '') as string
   const id = Number(payload.venta_id ?? payload.id ?? Date.now())
-  const fecha = String(payload.fecha ?? new Date().toISOString())
+  const fecha = String(payload.fecha ?? nowUTCMinus5Iso())
   const nuevo: PendingItem = { id, fecha, clienteId, clienteNombre, items, total, offline: true }
   pendientes.value = [nuevo, ...pendientes.value.filter((item) => item.id !== nuevo.id)]
 }

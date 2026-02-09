@@ -3,6 +3,7 @@ import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { computed, onMounted, ref } from 'vue'
 import { ENDPOINTS } from '../config/endpoints'
 import { getSessionUserId } from '../utils/session'
+import { fromLocalInputToUTCMinus5Iso, toLocalInputUTCMinus5 } from '../utils/time'
 
 type VentaDetalle = {
   venta_detalle_id: number
@@ -117,7 +118,7 @@ const abrirAbono = (cuenta: CuentaPorCobrar) => {
   errorAbono.value = null
   mensajeAbono.value = null
   formularioAbono.value = {
-    fecha: new Date().toISOString().slice(0, 16),
+    fecha: toLocalInputUTCMinus5(new Date()),
     monto: Number(cuenta.saldo ?? 0),
     concepto: 'Abono parcial'
   }
@@ -153,7 +154,7 @@ const registrarAbono = async () => {
     return
   }
   const payload = {
-    fecha: fechaObj.toISOString(),
+    fecha: fromLocalInputToUTCMinus5Iso(formularioAbono.value.fecha),
     monto: formularioAbono.value.monto,
     concepto: formularioAbono.value.concepto.trim(),
     caja_id: 1,

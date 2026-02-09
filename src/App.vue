@@ -15,6 +15,7 @@ import CierreCajaView from './views/CierreCajaView.vue'
 import MenuPrincipalView from './views/MenuPrincipalView.vue'
 import { ENDPOINTS } from './config/endpoints'
 import { getSessionUserId } from './utils/session'
+import { nowUTCMinus5Iso, toUTCMinus5Iso } from './utils/time'
 
 type VistaId =
   | 'menu-principal'
@@ -59,8 +60,6 @@ type Caja = {
   fecha_cierre?: string | null
   created_at?: string | null
 }
-
-const toUTCMinus5Iso = (date: Date) => new Date(date.getTime() - 5 * 60 * 60000).toISOString()
 
 const cajas = ref<Caja[]>([])
 const cargandoCajas = ref(false)
@@ -223,7 +222,7 @@ const iniciarSesion = async (credenciales: { usuario: string; contrasena: string
         console.warn('No se pudo escribir login.txt', err)
       }
     }
-    const timestamp = new Date().toISOString()
+    const timestamp = nowUTCMinus5Iso()
     const respuesta = await fetch(LOGIN_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

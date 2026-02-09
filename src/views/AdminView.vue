@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { ENDPOINTS } from '../config/endpoints'
+import { nowUTCMinus5Iso } from '../utils/time'
 
 type Usuario = {
   user_id: number
@@ -79,6 +80,9 @@ const clienteForm = reactive({
   descuentoPorcentaje: 0
 })
 const proveedorForm = reactive({ nombre: '', telefono: '', email: '' })
+
+const DEFAULT_TELEFONO = '0000000'
+const DEFAULT_EMAIL = 'SinCorreo@gmail.com'
 
 const accionesAdmin = [
   { id: 'usuario', titulo: 'Ver usuarios', descripcion: 'Listado y estado de usuarios.' },
@@ -345,7 +349,8 @@ const crearUsuario = async () => {
     const payload = {
       username,
       password,
-      ...(email ? { email } : {})
+      email: email || DEFAULT_EMAIL,
+      telephone_number: DEFAULT_TELEFONO
     }
 
     const respuesta = await fetch(USUARIOS_REGISTRO_ENDPOINT, {
@@ -361,8 +366,8 @@ const crearUsuario = async () => {
     usuarios.unshift({
       user_id: Number(data.user_id ?? data.id ?? Date.now()),
       username: String(data.username ?? username),
-      email: String(data.email ?? email),
-      telephone_number: (data.telephone_number ?? null) as string | null,
+      email: String((data.email ?? email) || DEFAULT_EMAIL),
+      telephone_number: (data.telephone_number ?? DEFAULT_TELEFONO) as string | null,
       is_active: data.is_active === false ? false : true,
       is_verified: data.is_verified === true,
       last_login_at: (data.last_login_at ?? null) as string | null,
@@ -454,8 +459,8 @@ const crearCliente = async () => {
   const nombre = clienteForm.nombre.trim()
   const telefono = clienteForm.telefono.trim()
   const email = clienteForm.email.trim().toLowerCase()
-  const telefonoPayload = telefono || null
-  const emailPayload = email || null
+  const telefonoPayload = telefono || DEFAULT_TELEFONO
+  const emailPayload = email || DEFAULT_EMAIL
   const descuentoPesos = Number(clienteForm.descuentoPesos || 0)
   const descuentoPorcentaje = Number(clienteForm.descuentoPorcentaje || 0) / 100
 
@@ -485,11 +490,11 @@ const crearCliente = async () => {
     const nuevo: Cliente = {
       id: String(payload.id ?? payload.cliente_id ?? Date.now()),
       nombre: String(payload.nombre ?? nombre),
-      telefono: String(payload.telefono ?? telefonoPayload ?? ''),
-      email: String(payload.email ?? emailPayload ?? ''),
+      telefono: String(payload.telefono ?? telefonoPayload ?? DEFAULT_TELEFONO),
+      email: String(payload.email ?? emailPayload ?? DEFAULT_EMAIL),
       descuentoPesos: Number(payload.descuento_pesos ?? descuentoPesos),
       descuentoPorcentaje: Number(payload.descuento_porcentaje ?? descuentoPorcentaje) * 100,
-      createdAt: String(payload.created_at ?? new Date().toISOString())
+      createdAt: String(payload.created_at ?? nowUTCMinus5Iso())
     }
     clientes.unshift(nuevo)
     limpiarCliente()
@@ -519,8 +524,8 @@ const actualizarCliente = async (id: string) => {
   const nombre = clienteForm.nombre.trim()
   const telefono = clienteForm.telefono.trim()
   const email = clienteForm.email.trim().toLowerCase()
-  const telefonoPayload = telefono || null
-  const emailPayload = email || null
+  const telefonoPayload = telefono || DEFAULT_TELEFONO
+  const emailPayload = email || DEFAULT_EMAIL
   const descuentoPesos = Number(clienteForm.descuentoPesos || 0)
   const descuentoPorcentaje = Number(clienteForm.descuentoPorcentaje || 0) / 100
 
@@ -552,8 +557,8 @@ const actualizarCliente = async (id: string) => {
       clientes[index] = {
         ...clientes[index],
         nombre: String(payload.nombre ?? nombre),
-        telefono: String(payload.telefono ?? telefonoPayload ?? ''),
-        email: String(payload.email ?? emailPayload ?? ''),
+        telefono: String(payload.telefono ?? telefonoPayload ?? DEFAULT_TELEFONO),
+        email: String(payload.email ?? emailPayload ?? DEFAULT_EMAIL),
         descuentoPesos: Number(payload.descuento_pesos ?? descuentoPesos),
         descuentoPorcentaje: Number(payload.descuento_porcentaje ?? descuentoPorcentaje) * 100
       }
@@ -601,8 +606,8 @@ const crearProveedor = async () => {
   const telefono = proveedorForm.telefono.trim()
   const email = proveedorForm.email.trim().toLowerCase()
 
-  if (!nombre || !telefono || !email) {
-    errorProveedor.value = 'Completa nombre, telefono y email.'
+  if (!nombre) {
+    errorProveedor.value = 'Completa el nombre.'
     return
   }
 
@@ -610,7 +615,11 @@ const crearProveedor = async () => {
     const respuesta = await fetch(PROVEEDORES_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, telefono, email })
+      body: JSON.stringify({
+        nombre,
+        telefono: telefono || DEFAULT_TELEFONO,
+        email: email || DEFAULT_EMAIL
+      })
     })
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
@@ -620,8 +629,8 @@ const crearProveedor = async () => {
     proveedores.unshift({
       id: Number(data.id ?? Date.now()),
       nombre: String(data.nombre ?? nombre),
-      telefono: String(data.telefono ?? telefono),
-      email: String(data.email ?? email)
+      telefono: String((data.telefono ?? telefono) || DEFAULT_TELEFONO),
+      email: String((data.email ?? email) || DEFAULT_EMAIL)
     })
     limpiarProveedor()
     exitoProveedor.value = 'Proveedor creado correctamente.'
@@ -853,7 +862,7 @@ const manejarOfflineEncolado = (event: Event) => {
       email: String(detalle.body.email ?? ''),
       descuentoPesos: Number(detalle.body.descuento_pesos ?? detalle.body.descuentoPesos ?? 0),
       descuentoPorcentaje: Number(detalle.body.descuento_porcentaje ?? detalle.body.descuentoPorcentaje ?? 0),
-      createdAt: new Date().toISOString()
+      createdAt: nowUTCMinus5Iso()
     }
     clientes.unshift(nuevo)
     return
@@ -901,8 +910,8 @@ const manejarOfflineEncolado = (event: Event) => {
       is_active: true,
       is_verified: false,
       last_login_at: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      created_at: nowUTCMinus5Iso(),
+      updated_at: nowUTCMinus5Iso()
     }
     usuarios.unshift(nuevo)
   }

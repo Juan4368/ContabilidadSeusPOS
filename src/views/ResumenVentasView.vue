@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { ENDPOINTS } from '../config/endpoints'
+import { getSessionCajaNombre } from '../utils/session'
 
 type ResumenVenta = {
   id?: number
@@ -33,8 +34,307 @@ type VentaDetalleRespuesta = {
   numero_factura: string
   fecha: string
   cliente_nombre: string
+  usuario_nombre?: string | null
+  caja_nombre?: string | null
+  tipo_pago?: string | null
+  es_credito?: boolean
   total: number
   detalles: DetalleVenta[]
+}
+
+const getPrinterConfig = () => {
+  try {
+    const raw = localStorage.getItem('pos_printer')
+    if (!raw) return null
+    const data = JSON.parse(raw) as {
+      deviceName?: string
+      widthMm?: number
+      silent?: boolean
+      scale?: number
+      method?: 'escpos' | 'html'
+    }
+    return {
+      deviceName: data?.deviceName?.trim() || undefined,
+      widthMm: Number(data?.widthMm) || 80,
+      silent: data?.silent !== false,
+      scale: Number(data?.scale) || 1,
+      method: data?.method === 'html' ? 'html' : 'escpos'
+    }
+  } catch {
+    return null
+  }
+}
+
+const normalizarTextoTicket = (value: string) => {
+  try {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\x20-\x7E]/g, '')
+  } catch {
+    return value.replace(/[^\x20-\x7E]/g, '')
+  }
+}
+
+const textoABytes = (value: string) => {
+  const limpio = normalizarTextoTicket(value)
+  const bytes: number[] = []
+  for (let i = 0; i < limpio.length; i += 1) {
+    bytes.push(limpio.charCodeAt(i) & 0xff)
+  }
+  return bytes
+}
+
+const wrapTexto = (value: string, width: number) => {
+  const limpio = normalizarTextoTicket(value)
+  if (limpio.length <= width) return [limpio]
+  const partes: string[] = []
+  let actual = ''
+  for (const palabra of limpio.split(' ')) {
+    if (!actual.length) {
+      actual = palabra
+      continue
+    }
+    if (actual.length + 1 + palabra.length <= width) {
+      actual = `${actual} ${palabra}`
+    } else {
+      partes.push(actual)
+      actual = palabra
+    }
+  }
+  if (actual) partes.push(actual)
+  return partes.flatMap((linea) => {
+    if (linea.length <= width) return [linea]
+    const divididas: string[] = []
+    let buffer = linea
+    while (buffer.length > width) {
+      divididas.push(buffer.slice(0, width))
+      buffer = buffer.slice(width)
+    }
+    if (buffer.length) divididas.push(buffer)
+    return divididas
+  })
+}
+
+const lineaIzqDer = (izq: string, der: string, width: number) => {
+  const left = normalizarTextoTicket(izq)
+  const right = normalizarTextoTicket(der)
+  if (left.length + right.length + 1 > width) {
+    const recorte = Math.max(width - right.length - 1, 0)
+    return `${left.slice(0, recorte)} ${right}`.trim()
+  }
+  return `${left}${' '.repeat(width - left.length - right.length)}${right}`
+}
+
+const construirBytesEscPosVenta = (
+  venta: VentaDetalleRespuesta,
+  widthMm = 80,
+  scale = 1
+) => {
+  const escala = Math.max(0.5, Math.min(1.6, Number(scale) || 1))
+  const usarFuenteB = escala <= 0.9
+  let widthCharsBase = widthMm <= 60 ? (usarFuenteB ? 42 : 32) : usarFuenteB ? 64 : 48
+  const sizeMode = escala >= 1.3 ? 0x11 : escala >= 1.15 ? 0x01 : 0x00
+  if (sizeMode === 0x11) {
+    widthCharsBase = Math.max(16, Math.floor(widthCharsBase / 2))
+  }
+  const widthChars = widthCharsBase
+  const bytes: number[] = []
+  const add = (text: string) => bytes.push(...textoABytes(text), 0x0a)
+  const setAlign = (n: number) => bytes.push(0x1b, 0x61, n)
+  const setBold = (on: boolean) => bytes.push(0x1b, 0x45, on ? 1 : 0)
+  const setSize = (n: number) => bytes.push(0x1d, 0x21, n)
+  const setFont = (n: number) => bytes.push(0x1b, 0x4d, n)
+  const hr = () => add('-'.repeat(widthChars))
+
+  bytes.push(0x1b, 0x40)
+  setFont(usarFuenteB ? 1 : 0)
+  setSize(sizeMode)
+  setAlign(1)
+  setBold(true)
+  add('AUTOSERVICIO EL PAISA')
+  setBold(false)
+  add('FACTURA DE VENTA')
+  setAlign(0)
+  hr()
+  add(lineaIzqDer('Factura', venta.numero_factura || '-', widthChars))
+  add(lineaIzqDer('Fecha', formatFechaCorta(venta.fecha), widthChars))
+  add(lineaIzqDer('Cliente', venta.cliente_nombre || '-', widthChars))
+  if (venta.usuario_nombre) {
+    add(lineaIzqDer('Usuario', venta.usuario_nombre, widthChars))
+  }
+  const cajaNombre = venta.caja_nombre || getSessionCajaNombre() || ''
+  if (cajaNombre) {
+    add(lineaIzqDer('Caja', cajaNombre, widthChars))
+  }
+  const pagoLabel = venta.es_credito && !venta.tipo_pago ? 'credito' : venta.tipo_pago || null
+  if (pagoLabel) {
+    add(lineaIzqDer('Pago', pagoLabel, widthChars))
+  }
+  hr()
+  if (!venta.detalles.length) {
+    add('Sin productos')
+  } else {
+    venta.detalles.forEach((item) => {
+      wrapTexto(item.producto_nombre || 'Producto', widthChars).forEach(add)
+      const totalLinea = Number(item.subtotal ?? 0)
+      add(lineaIzqDer(`x${item.cantidad}`, formatearMoneda(String(totalLinea)), widthChars))
+      add(lineaIzqDer('P.U', formatearMoneda(String(item.precio_unitario ?? 0)), widthChars))
+    })
+  }
+  hr()
+  add(lineaIzqDer('Total', formatearMoneda(String(venta.total)), widthChars))
+  hr()
+  setAlign(1)
+  add('Gracias por su compra')
+  bytes.push(0x0a, 0x0a, 0x0a)
+  bytes.push(0x1d, 0x56, 0x00)
+  return bytes
+}
+
+const construirHtmlVenta = (venta: VentaDetalleRespuesta) => {
+  const pagoLabel = venta.es_credito && !venta.tipo_pago ? 'credito' : venta.tipo_pago || ''
+  const cajaNombre = venta.caja_nombre || getSessionCajaNombre() || ''
+  const lineas = venta.detalles.length
+    ? venta.detalles
+        .map(
+          (item) => `
+        <div class="linea">
+          <div class="linea__nombre">${normalizarTextoTicket(item.producto_nombre || 'Producto')}</div>
+          <div class="linea__meta">
+            <span>x${item.cantidad}</span>
+            <span>${formatearMoneda(String(item.subtotal ?? 0))}</span>
+          </div>
+          <div class="linea__pu">P.U: ${formatearMoneda(String(item.precio_unitario ?? 0))}</div>
+        </div>`
+        )
+        .join('')
+    : '<div class="vacio">Sin productos</div>'
+  return `
+  <style>
+    @page { margin: 0; }
+    body { margin: 0; font-family: "Courier New", monospace; color: #111; }
+    .ticket { padding: 10px 8px; width: 100%; box-sizing: border-box; }
+    .center { text-align: center; }
+    .titulo { font-weight: bold; font-size: 16px; }
+    .subtitulo { font-size: 12px; }
+    .fila { display: flex; justify-content: space-between; font-size: 12px; margin: 2px 0; }
+    .linea { margin: 6px 0; }
+    .linea__nombre { font-size: 12px; }
+    .linea__meta { display: flex; justify-content: space-between; font-size: 12px; }
+    .linea__pu { font-size: 11px; color: #444; margin-top: 2px; }
+    .separador { border-top: 1px dashed #111; margin: 8px 0; }
+    .total { font-weight: bold; font-size: 14px; }
+    .vacio { font-size: 12px; text-align: center; margin: 8px 0; }
+  </style>
+  <section class="ticket">
+    <div class="center titulo">AUTOSERVICIO EL PAISA</div>
+    <div class="center subtitulo">FACTURA DE VENTA</div>
+    <div class="separador"></div>
+    <div class="fila"><span>Factura</span><span>${venta.numero_factura || '-'}</span></div>
+    <div class="fila"><span>Fecha</span><span>${formatFechaCorta(venta.fecha)}</span></div>
+    <div class="fila"><span>Cliente</span><span>${venta.cliente_nombre || '-'}</span></div>
+    ${venta.usuario_nombre ? `<div class="fila"><span>Usuario</span><span>${venta.usuario_nombre}</span></div>` : ''}
+    ${cajaNombre ? `<div class="fila"><span>Caja</span><span>${cajaNombre}</span></div>` : ''}
+    ${pagoLabel ? `<div class="fila"><span>Pago</span><span>${pagoLabel}</span></div>` : ''}
+    <div class="separador"></div>
+    ${lineas}
+    <div class="separador"></div>
+    <div class="fila total"><span>Total</span><span>${formatearMoneda(String(venta.total))}</span></div>
+    <div class="separador"></div>
+    <div class="center subtitulo">Gracias por su compra</div>
+  </section>`
+}
+
+const obtenerVentaParaImpresion = async (item: ResumenVenta | VentaDetalleRespuesta) => {
+  if ((item as VentaDetalleRespuesta).detalles !== undefined) {
+    return item as VentaDetalleRespuesta
+  }
+  const numeroFactura = String((item as ResumenVenta).numero_factura ?? '').trim()
+  if (!numeroFactura) {
+    throw new Error('No hay numero de factura para buscar.')
+  }
+  const endpointBusqueda = `${ENDPOINTS.VENTAS_POS}?numero_factura=${encodeURIComponent(numeroFactura)}`
+  let respuesta = await fetch(endpointBusqueda)
+  if (!respuesta.ok) {
+    throw new Error(`Error ${respuesta.status}`)
+  }
+  const data = (await respuesta.json()) as unknown
+  const venta = Array.isArray(data)
+    ? ((data as Array<Record<string, unknown>>).find(
+        (v) => String(v.numero_factura ?? '').trim() === numeroFactura
+      ) as Record<string, unknown> | undefined)
+    : (data as Record<string, unknown>)
+  if (!venta) {
+    throw new Error('No se encontraron detalles de la venta.')
+  }
+  const detalle = extraerDetalle(venta)
+  if (!detalle.detalles.length) {
+    const ventaId = Number(venta.venta_id ?? venta.id ?? 0) || 0
+    if (ventaId) {
+      const respuestaDetalle = await fetch(`${ENDPOINTS.VENTAS_POS}${ventaId}/detalles`)
+      if (respuestaDetalle.ok) {
+        const dataDetalle = (await respuestaDetalle.json()) as unknown
+        const listaDetalle = (Array.isArray(dataDetalle)
+          ? dataDetalle
+          : Array.isArray((dataDetalle as Record<string, unknown>)?.results)
+            ? (dataDetalle as Record<string, unknown>).results
+            : Array.isArray((dataDetalle as Record<string, unknown>)?.data)
+              ? (dataDetalle as Record<string, unknown>).data
+              : []) as unknown[]
+        detalle.detalles = listaDetalle
+          .map((itemDet: unknown) => {
+            if (!itemDet || typeof itemDet !== 'object') return null
+            const raw = itemDet as Record<string, unknown>
+            return {
+              id: Number(raw.id ?? raw.detalle_id ?? raw.venta_detalle_id ?? 0) || undefined,
+              producto_nombre: String(raw.producto_nombre ?? raw.nombre ?? ''),
+              producto_id: Number(raw.producto_id ?? raw.productoId ?? 0) || undefined,
+              cantidad: Number(raw.cantidad ?? 0),
+              precio_unitario: Number(raw.precio_unitario ?? raw.precio ?? 0),
+              subtotal: Number(raw.subtotal ?? 0),
+              descuento: Number(raw.descuento ?? raw.descuento_monto ?? raw.descuentoMonto ?? 0)
+            }
+          })
+          .filter(Boolean) as DetalleVenta[]
+      }
+    }
+  }
+  return detalle
+}
+
+const imprimirVenta = async (item: ResumenVenta | VentaDetalleRespuesta) => {
+  try {
+    const venta = await obtenerVentaParaImpresion(item)
+    const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p: unknown) => Promise<void> } })
+      .ipcRenderer
+    const config = getPrinterConfig()
+    if (ipc?.invoke && config?.deviceName && config.method !== 'html') {
+      const bytes = construirBytesEscPosVenta(venta, config.widthMm ?? 80, config.scale ?? 1)
+      await ipc.invoke('pos:print-raw', { deviceName: config.deviceName, bytes })
+      return
+    }
+    const html = construirHtmlVenta(venta)
+    const iframe = document.createElement('iframe')
+    iframe.style.position = 'fixed'
+    iframe.style.right = '0'
+    iframe.style.bottom = '0'
+    iframe.style.width = '0'
+    iframe.style.height = '0'
+    iframe.style.border = '0'
+    iframe.srcdoc = `<!doctype html><html><head><title>Venta ${venta.numero_factura || ''}</title></head><body>${html}</body></html>`
+    document.body.appendChild(iframe)
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus()
+        iframe.contentWindow?.print()
+      } finally {
+        setTimeout(() => iframe.remove(), 500)
+      }
+    }
+  } catch {
+    window.alert('No se pudo imprimir la venta.')
+  }
 }
 
 const resumenes = ref<ResumenVenta[]>([])
@@ -65,11 +365,19 @@ const formatFechaCorta = (valor: string) => {
   )}:${pad(fecha.getMinutes())}`
 }
 
-const resumenOrdenado = computed(() =>
-  [...resumenes.value]
-    .filter((item) => item.estado === true)
-    .sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0))
-)
+const criterioBusqueda = ref('')
+
+const resumenOrdenado = computed(() => {
+  const termino = criterioBusqueda.value.trim().toLowerCase()
+  const filtrados = [...resumenes.value].filter((item) => {
+    if (item.estado !== true) return false
+    if (!termino) return true
+    const factura = String(item.numero_factura ?? '').toLowerCase()
+    const cliente = String(item.cliente_nombre ?? '').toLowerCase()
+    return factura.includes(termino) || cliente.includes(termino)
+  })
+  return filtrados.sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0))
+})
 
 const resumenPagos = computed(() => {
   const totales = {
@@ -154,7 +462,7 @@ const actualizarEstadoVenta = async (item: ResumenVenta) => {
         throw new Error('No se puede actualizar: falta el id de la venta.')
       }
       const respuestaBusqueda = await fetch(
-        `${ENDPOINTS.VENTAS_LOCAL}?numero_factura=${encodeURIComponent(numeroFactura)}`
+        `${ENDPOINTS.VENTAS_POS}?numero_factura=${encodeURIComponent(numeroFactura)}`
       )
       if (!respuestaBusqueda.ok) {
         const detalle = await respuestaBusqueda.text().catch(() => '')
@@ -170,8 +478,8 @@ const actualizarEstadoVenta = async (item: ResumenVenta) => {
     }
     const estadoNuevo = item.estado === false ? true : false
     const endpoints = [
-      `${ENDPOINTS.VENTAS_LOCAL}${item.id}/estado`,
-      `${ENDPOINTS.VENTAS_LOCAL}${item.id}`
+      `${ENDPOINTS.VENTAS_POS}${item.id}/estado`,
+      `${ENDPOINTS.VENTAS_POS}${item.id}`
     ]
     let respuesta: Response | null = null
     let detalleError = ''
@@ -220,11 +528,17 @@ const extraerDetalle = (venta: Record<string, unknown>): VentaDetalleRespuesta =
         })
         .filter(Boolean) as DetalleVenta[]
     : []
+  const clienteFallback = venta.cliente_id ? `Cliente ${String(venta.cliente_id)}` : ''
+  const usuarioFallback = venta.user_id ? `Usuario ${String(venta.user_id)}` : ''
   return {
     venta_id: Number(venta.venta_id ?? venta.id ?? 0) || undefined,
     numero_factura: String(venta.numero_factura ?? ''),
     fecha: String(venta.fecha ?? ''),
-    cliente_nombre: String(venta.cliente_nombre ?? ''),
+    cliente_nombre: String(venta.cliente_nombre ?? venta.cliente ?? venta.nombre_cliente ?? clienteFallback ?? ''),
+    usuario_nombre: venta.usuario_nombre ? String(venta.usuario_nombre) : usuarioFallback || null,
+    caja_nombre: venta.caja_nombre ? String(venta.caja_nombre) : venta.caja ? String(venta.caja) : null,
+    tipo_pago: venta.tipo_pago ? String(venta.tipo_pago) : null,
+    es_credito: Boolean(venta.es_credito),
     total: Number(venta.total ?? 0),
     detalles
   }
@@ -238,32 +552,37 @@ const cargarDetalle = async (item: ResumenVenta) => {
     numero_factura: item.numero_factura,
     fecha: item.fecha,
     cliente_nombre: item.cliente_nombre,
+    usuario_nombre: item.usuario_nombre ?? null,
+    caja_nombre: (item as ResumenVenta & { caja_nombre?: string }).caja_nombre ?? null,
+    tipo_pago: item.tipo_pago ?? null,
+    es_credito: item.es_credito,
     total: Number(item.total ?? 0),
     detalles: []
   }
   try {
     const numeroFactura = String(item.numero_factura ?? '').trim()
-    const id = item.id
-    const endpointDirecto = id ? `${ENDPOINTS.VENTAS_LOCAL}${id}` : `${ENDPOINTS.VENTAS_LOCAL}${encodeURIComponent(numeroFactura)}`
-    let respuesta = await fetch(endpointDirecto)
-    if (!respuesta.ok && numeroFactura) {
-      const endpointBusqueda = `${ENDPOINTS.VENTAS_LOCAL}?numero_factura=${encodeURIComponent(numeroFactura)}`
-      respuesta = await fetch(endpointBusqueda)
+    if (!numeroFactura) {
+      throw new Error('No hay numero de factura para buscar.')
     }
+    const endpointBusqueda = `${ENDPOINTS.VENTAS_POS}?numero_factura=${encodeURIComponent(numeroFactura)}`
+    const respuesta = await fetch(endpointBusqueda)
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = (await respuesta.json()) as unknown
-    const venta = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : (data as Record<string, unknown>)
+    const venta = Array.isArray(data)
+      ? ((data as Array<Record<string, unknown>>).find(
+          (v) => String(v.numero_factura ?? '').trim() === numeroFactura
+        ) as Record<string, unknown> | undefined)
+      : (data as Record<string, unknown>)
     if (!venta) {
       throw new Error('No se encontraron detalles de la venta.')
     }
     const ventaId = Number(venta.venta_id ?? venta.id ?? 0) || 0
     const detalle = extraerDetalle(venta)
-    // Fallback: algunos endpoints devuelven solo cabecera y los detalles en otra ruta
     if (!detalle.detalles.length && ventaId) {
-      const respuestaDetalle = await fetch(`${ENDPOINTS.VENTAS_LOCAL}${ventaId}/detalles`)
+      const respuestaDetalle = await fetch(`${ENDPOINTS.VENTAS_POS}${ventaId}/detalles`)
       if (respuestaDetalle.ok) {
         const dataDetalle = (await respuestaDetalle.json()) as unknown
         const listaDetalle = (Array.isArray(dataDetalle)
@@ -314,7 +633,7 @@ const eliminarDetalle = async (detalle: DetalleVenta) => {
     return
   }
   try {
-    const respuesta = await fetch(`${ENDPOINTS.VENTAS_LOCAL}${ventaIdFinal}/detalles/${detalleId}`, {
+    const respuesta = await fetch(`${ENDPOINTS.VENTAS_POS}${ventaIdFinal}/detalles/${detalleId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ venta_id: ventaIdFinal, producto_id: productoId })
@@ -330,7 +649,7 @@ const eliminarDetalle = async (detalle: DetalleVenta) => {
         errorDetalle.value = 'No se pudo actualizar estado: falta el id de la venta.'
         return
       }
-      const respuestaEstado = await fetch(`${ENDPOINTS.VENTAS_LOCAL}${ventaId}/estado`, {
+      const respuestaEstado = await fetch(`${ENDPOINTS.VENTAS_POS}${ventaId}/estado`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ estado: false, activo: false, is_active: false })
@@ -359,6 +678,12 @@ onMounted(() => {
     <header class="resumen__cabecera">
       <div>
         <h1>Total ventas: {{ formatearMoneda(String(totalVentas)) }}</h1>
+        <input
+          v-model="criterioBusqueda"
+          type="search"
+          placeholder="Buscar por factura o cliente"
+          class="resumen__buscador"
+        />
       </div>
       <div class="resumen__acciones">
         <SessionRoleChip />
@@ -485,6 +810,10 @@ onMounted(() => {
             </div>
           </li>
         </ul>
+        <div class="detalle__acciones">
+          <button type="button" class="boton boton--detalle" @click="imprimirVenta(detalleVenta)">Imprimir</button>
+          <button type="button" class="boton secundario" @click="cerrarDetalle">Cerrar</button>
+        </div>
       </section>
     </div>
   </main>
@@ -525,6 +854,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+.resumen__buscador {
+  border-radius: 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.5rem 0.75rem;
+  background: rgba(15, 18, 26, 0.85);
+  color: #e2e8f0;
+  min-width: 220px;
+  margin-top: 0.5rem;
 }
 
 .resumen__tarjetas {
@@ -697,6 +1036,13 @@ onMounted(() => {
   border: 1px solid rgba(148, 163, 184, 0.3);
   padding: 0.35rem 0.6rem;
   font-size: 0.8rem;
+}
+
+.detalle__acciones {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
 }
 
 .boton--estado {
