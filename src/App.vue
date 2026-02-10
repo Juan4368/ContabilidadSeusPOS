@@ -51,6 +51,12 @@ const appSyncing = ref(false)
 const appQueueCount = ref(0)
 let pendientesInterval: number | undefined
 const LOGIN_ENDPOINT = ENDPOINTS.LOGIN
+const sidebarHidden = ref(localStorage.getItem('ui_sidebar_hidden') !== '0')
+
+const toggleSidebar = () => {
+  sidebarHidden.value = !sidebarHidden.value
+  localStorage.setItem('ui_sidebar_hidden', sidebarHidden.value ? '1' : '0')
+}
 
 type Caja = {
   id: number
@@ -108,6 +114,7 @@ const vistasDisponibles = computed(() =>
 const componenteActual = computed(() => vistas.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView)
 
 const vistasMenuPrincipal = computed(() => vistas.filter((vista) => vista.id !== 'menu-principal'))
+const vistasSidebar = computed(() => vistasMenuPrincipal.value)
 
 watch(vistas, (nuevas) => {
   if (!nuevas.find((vista) => vista.id === vistaActiva.value)) {
@@ -529,55 +536,75 @@ hidratarSesion()
       @login="iniciarSesion"
     />
     <template v-else>
-      <header class="selector">
-        <div class="selector__botones">
-          <button
-            v-for="vista in vistasDisponibles"
-            :key="vista.id"
-            type="button"
-            :class="['selector__boton', { activa: vista.id === vistaActiva }]"
-            :disabled="vista.id === 'pos' && !tieneCajaSeleccionada"
-            @click="seleccionarVista(vista.id)"
-          >
-            <span class="selector__nombre">{{ vista.nombre }}</span>
-            <small class="selector__descripcion">{{ vista.descripcion }}</small>
-            <span v-if="vista.id === 'ventas-pendientes'" class="selector__badge">
-              {{ cargandoPendientes ? '...' : ventasPendientes }}
-            </span>
-          </button>
-        </div>
-        <div class="selector__total">
-          <span class="selector__total-label">Total cuenta</span>
-          <strong class="selector__total-valor">{{ formatCurrency(totalCuenta) }}</strong>
-        </div>
-        <div class="selector__cajas">
-          <span class="selector__cajas-label">Cajas</span>
-          <div class="selector__cajas-lista">
-            <button v-if="cargandoCajas" type="button" class="selector__caja" disabled>
-              Cargando...
-            </button>
-            <button v-else-if="!cajas.length" type="button" class="selector__caja" disabled>
-              Sin cajas
-            </button>
+      <div :class="['app-layout', { 'app-layout--collapsed': sidebarHidden }]">
+        <aside v-if="!sidebarHidden" class="sidebar">
+          <div class="sidebar__logo">SEUS POS</div>
+          <div class="sidebar__section">
+            <span class="sidebar__label">Vistas</span>
             <button
-              v-for="caja in cajas"
-              v-else
-              :key="caja.id"
+              v-for="vista in vistasSidebar"
+              :key="vista.id"
               type="button"
-              :class="[
-                'selector__caja',
-                { activa: sesionCajaId === caja.id, bloqueada: caja.estado === 'ABIERTA' }
-              ]"
-              :disabled="actualizandoCaja || (cajaAbiertaEnSesion && sesionCajaId !== caja.id && caja.estado !== 'ABIERTA')"
-              @click="seleccionarCaja(caja)"
+              :class="['sidebar__item', { activa: vista.id === vistaActiva }]"
+              :disabled="vista.id === 'pos' && !tieneCajaSeleccionada"
+              @click="seleccionarVista(vista.id)"
             >
-              <span>{{ caja.nombre ?? `Caja ${caja.id}` }}</span>
-              <small v-if="caja.estado === 'ABIERTA'">ABIERTA</small>
+              <span class="sidebar__item-nombre">{{ vista.nombre }}</span>
+              <small class="sidebar__item-desc">{{ vista.descripcion }}</small>
+              <span v-if="vista.id === 'ventas-pendientes'" class="sidebar__badge">
+                {{ cargandoPendientes ? '...' : ventasPendientes }}
+              </span>
             </button>
           </div>
-          <small v-if="errorCajas" class="selector__cajas-error">{{ errorCajas }}</small>
-        </div>
-        <div class="selector__sesion">
+        </aside>
+
+        <section class="app-content">
+          <header class="selector">
+            <div class="selector__row">
+              <button
+                type="button"
+                class="selector__toggle"
+                :aria-label="sidebarHidden ? 'Mostrar menu lateral' : 'Ocultar menu lateral'"
+                @click="toggleSidebar"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="selector__toggle-icon">
+                  <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" fill="currentColor" />
+                </svg>
+              </button>
+              <div class="selector__cajas">
+                <span class="selector__cajas-label">Cajas</span>
+                <div class="selector__cajas-lista">
+                  <button v-if="cargandoCajas" type="button" class="selector__caja" disabled>
+                    Cargando...
+                  </button>
+                  <button v-else-if="!cajas.length" type="button" class="selector__caja" disabled>
+                    Sin cajas
+                  </button>
+                  <button
+                    v-for="caja in cajas"
+                    v-else
+                    :key="caja.id"
+                    type="button"
+                    :class="[
+                      'selector__caja',
+                      { activa: sesionCajaId === caja.id, bloqueada: caja.estado === 'ABIERTA' }
+                    ]"
+                    :disabled="actualizandoCaja || (cajaAbiertaEnSesion && sesionCajaId !== caja.id && caja.estado !== 'ABIERTA')"
+                    @click="seleccionarCaja(caja)"
+                  >
+                    <span>{{ caja.nombre ?? `Caja ${caja.id}` }}</span>
+                    <small v-if="caja.estado === 'ABIERTA'">ABIERTA</small>
+                  </button>
+                </div>
+                <small v-if="errorCajas" class="selector__cajas-error">{{ errorCajas }}</small>
+              </div>
+            </div>
+            <div class="selector__right">
+              <div v-if="vistaActiva === 'pos'" class="selector__total">
+              <span class="selector__total-label">Total cuenta</span>
+              <strong class="selector__total-valor">{{ formatCurrency(totalCuenta) }}</strong>
+            </div>
+            <div class="selector__sesion">
           <button type="button" class="selector__sesion-boton">
             Sesión: {{ sesionUsuario ?? 'Usuario' }}
             <span v-if="sesionRoles.length" class="selector__sesion-rol">· {{ sesionRoles.join(', ') }}</span>
@@ -587,6 +614,7 @@ hidratarSesion()
           </span>
           <button type="button" class="selector__sesion-cerrar" @click="cerrarSesion">Cerrar sesión</button>
         </div>
+            </div>
       </header>
 
       <section v-if="vistaActiva === 'pos' && !tieneCajaSeleccionada" class="selector__bloqueo">
@@ -607,6 +635,8 @@ hidratarSesion()
         @seleccionar-caja="seleccionarCaja"
       />
       <component v-else :is="componenteActual" />
+        </section>
+      </div>
     </template>
   </main>
 </template>
@@ -617,13 +647,175 @@ hidratarSesion()
   gap: 1rem;
 }
 
-.selector {
+.app-layout {
   display: grid;
-  gap: 0.35rem;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 1rem;
+  min-height: calc(100vh - 2rem);
+}
+
+.app-layout--collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sidebar {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(8, 10, 14, 0.92);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.sidebar__logo {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #f8fafc;
+  font-size: 0.95rem;
+}
+
+.sidebar__section {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.sidebar__label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.sidebar__item {
+  display: grid;
+  gap: 0.1rem;
+  text-align: left;
+  border-radius: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(20, 24, 32, 0.6);
+  color: #e2e8f0;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.sidebar__item:hover,
+.sidebar__item:focus-visible {
+  outline: none;
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.6);
+}
+
+.sidebar__item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.sidebar__item.activa {
+  border-color: rgba(56, 189, 248, 0.9);
+  background: linear-gradient(140deg, rgba(56, 189, 248, 0.16), rgba(15, 23, 42, 0.65));
+}
+
+.sidebar__item-nombre {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.sidebar__item-desc {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.sidebar__badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  color: #0f172a;
+  background: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.9);
+}
+
+.app-content {
+  display: grid;
+  gap: 1rem;
+}
+
+.selector {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  height: 76px;
   padding: 0.5rem 0.75rem;
   border-radius: 0.9rem;
   border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(10, 11, 14, 0.8);
+}
+
+.selector__row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.selector__right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.selector__toggle {
+  justify-self: start;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.15);
+  color: #e2e8f0;
+  border-radius: 0.7rem;
+  padding: 0.35rem;
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.selector__toggle:hover,
+.selector__toggle:focus-visible {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.8);
+}
+
+.selector__toggle-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 
 .selector__titulo {
@@ -632,12 +824,6 @@ hidratarSesion()
   font-size: 0.95rem;
   letter-spacing: 0.02em;
   color: #e2e8f0;
-}
-
-.selector__botones {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
 }
 
 .selector__total {
@@ -667,22 +853,6 @@ hidratarSesion()
   color: #fef3c7;
 }
 
-.selector__badge {
-  align-self: flex-start;
-  margin-top: 0.35rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 800;
-  color: #0f172a;
-  background: #bae6fd;
-  border: 1px solid rgba(56, 189, 248, 0.9);
-}
-
 .offline-banner {
   display: grid;
   gap: 0.2rem;
@@ -706,8 +876,10 @@ hidratarSesion()
 }
 
 .selector__cajas {
-  display: grid;
-  gap: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .selector__cajas-label {
@@ -810,48 +982,6 @@ hidratarSesion()
   font-size: 0.85rem;
 }
 
-.selector__boton {
-  background: rgba(120, 126, 137, 0.14);
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  color: #e2e8f0;
-  border-radius: 0.75rem;
-  padding: 0.45rem 0.7rem;
-  min-width: 140px;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
-}
-
-.selector__boton:hover,
-.selector__boton:focus-visible {
-  outline: none;
-  transform: translateY(-1px);
-  border-color: rgba(250, 204, 21, 0.55);
-}
-
-.selector__boton:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.selector__boton.activa {
-  background: linear-gradient(130deg, rgba(250, 204, 21, 0.16), rgba(255, 255, 255, 0.06));
-  border-color: rgba(250, 204, 21, 0.7);
-}
-
-.selector__nombre {
-  display: block;
-  font-weight: 700;
-  font-size: 0.9rem;
-}
-
-.selector__descripcion {
-  display: block;
-  color: #cbd5e1;
-  font-size: 0.8rem;
-}
-
 .selector__bloqueo {
   border: 1px dashed rgba(250, 204, 21, 0.5);
   background: rgba(250, 204, 21, 0.08);
@@ -862,5 +992,12 @@ hidratarSesion()
 }
 
 @media (max-width: 768px) {
+  .app-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+  }
 }
 </style>

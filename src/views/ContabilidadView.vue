@@ -117,6 +117,22 @@ const totalEgresos = computed(() =>
   egresos.value.reduce((total, item) => total + Number(item.monto ?? 0), 0)
 )
 
+const egresosHoy = computed(() => {
+  const hoy = fechaHoy()
+  const desde = new Date(`${hoy}T00:00:00`)
+  const hasta = new Date(`${hoy}T23:59:59`)
+  return egresos.value.filter((item) => {
+    const fechaRaw = item.fecha_dia_hora || item.fecha
+    const fecha = fechaRaw ? new Date(fechaRaw) : null
+    if (!fecha) return false
+    return fecha >= desde && fecha <= hasta
+  })
+})
+
+const totalEgresosHoy = computed(() =>
+  egresosHoy.value.reduce((total, item) => total + Number(item.monto ?? 0), 0)
+)
+
 const egresosFiltrados = computed(() => {
   const desde = filtroFechaDesde.value ? new Date(`${filtroFechaDesde.value}T00:00:00`) : null
   const hasta = filtroFechaHasta.value ? new Date(`${filtroFechaHasta.value}T23:59:59`) : null
@@ -130,6 +146,22 @@ const egresosFiltrados = computed(() => {
     if (proveedorId > 0 && Number(item.proveedor_id ?? 0) !== proveedorId) return false
     return true
   })
+})
+
+const totalEgresosFiltrados = computed(() =>
+  egresosFiltrados.value.reduce((total, item) => total + Number(item.monto ?? 0), 0)
+)
+
+const detalleFiltro = computed(() => {
+  const desde = filtroFechaDesde.value?.trim()
+  const hasta = filtroFechaHasta.value?.trim()
+  if (desde && hasta) {
+    if (desde === hasta) return `Día ${desde}`
+    return `Rango ${desde} - ${hasta}`
+  }
+  if (desde) return `Desde ${desde}`
+  if (hasta) return `Hasta ${hasta}`
+  return 'Sin filtro'
 })
 
 const normalizarNota = (valor?: string) =>
@@ -269,7 +301,7 @@ const cargarEgresos = async () => {
         } as MovimientoEgreso
       })
       .filter(Boolean) as MovimientoEgreso[]
-    resumen[1].valor = formatearMoneda(totalEgresos.value)
+    resumen[1].valor = formatearMoneda(totalEgresosFiltrados.value)
   } catch (err) {
     const detalle = err instanceof Error ? err.message : String(err)
     errorEgresos.value = `No fue posible cargar egresos. ${detalle}`
@@ -547,29 +579,21 @@ onMounted(() => {
     <section class="contabilidad__resumen">
       <article class="tarjeta">
         <div>
-          <p class="tarjeta__titulo">{{ resumen[1].titulo }}</p>
-          <p class="tarjeta__valor">{{ resumen[1].valor }}</p>
-          <p class="tarjeta__detalle">{{ resumen[1].detalle }}</p>
+          <p class="tarjeta__titulo">Egresos totales</p>
+          <p class="tarjeta__valor">{{ formatearMoneda(totalEgresosFiltrados) }}</p>
         </div>
-        <span :class="['tarjeta__estado', `tarjeta__estado--${resumen[1].estado}`]">
-          {{ resumen[1].estado }}
-        </span>
       </article>
       <article class="tarjeta">
         <div>
           <p class="tarjeta__titulo">Caja</p>
           <p class="tarjeta__valor">{{ formatearMoneda(totalCaja) }}</p>
-          <p class="tarjeta__detalle">Mes actual</p>
         </div>
-        <span class="tarjeta__estado">estable</span>
       </article>
       <article class="tarjeta">
         <div>
           <p class="tarjeta__titulo">Rinonera</p>
           <p class="tarjeta__valor">{{ formatearMoneda(totalRinonera) }}</p>
-          <p class="tarjeta__detalle">Mes actual</p>
         </div>
-        <span class="tarjeta__estado">estable</span>
       </article>
     </section>
 
