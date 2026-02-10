@@ -64,8 +64,14 @@ const egresos = ref<MovimientoEgreso[]>([])
 const cargandoEgresos = ref(false)
 const errorEgresos = ref<string | null>(null)
 const editandoEgreso = ref<MovimientoEgreso | null>(null)
-const filtroFechaDesde = ref('')
-const filtroFechaHasta = ref('')
+const fechaHoy = () => {
+  const hoy = new Date()
+  const pad = (num: number) => num.toString().padStart(2, '0')
+  return `${hoy.getFullYear()}-${pad(hoy.getMonth() + 1)}-${pad(hoy.getDate())}`
+}
+
+const filtroFechaDesde = ref(fechaHoy())
+const filtroFechaHasta = ref(fechaHoy())
 const filtroProveedorId = ref(0)
 const editandoEgresoForm = ref({
   fecha: toLocalInputUTCMinus5(new Date()),
@@ -79,8 +85,6 @@ const editandoEgresoForm = ref({
   venta_id: 0
 })
 const guardandoEgreso = ref(false)
-const eliminandoEgreso = ref<number | null>(null)
-const actualizandoMovimiento = ref<number | null>(null)
 
 const formularioMovimiento = ref<MovimientoFinancieroPayload>({
   fecha: toLocalInputUTCMinus5(new Date()),
@@ -127,6 +131,32 @@ const egresosFiltrados = computed(() => {
     return true
   })
 })
+
+const normalizarNota = (valor?: string) =>
+  (valor ?? '')
+    .toString()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+
+const montoCaja = (item: MovimientoEgreso) => {
+  const nota = normalizarNota(item.nota)
+  if (nota.includes('rinonera')) return 0
+  return nota.includes('caja') ? Number(item.monto ?? 0) : 0
+}
+
+const montoRinonera = (item: MovimientoEgreso) => {
+  const nota = normalizarNota(item.nota)
+  return nota.includes('rinonera') ? Number(item.monto ?? 0) : 0
+}
+
+const totalCaja = computed(() =>
+  egresosFiltrados.value.reduce((acc, item) => acc + montoCaja(item), 0)
+)
+
+const totalRinonera = computed(() =>
+  egresosFiltrados.value.reduce((acc, item) => acc + montoRinonera(item), 0)
+)
 
 const actualizarMontoMovimiento = (event: Event) => {
   const value = (event.target as HTMLInputElement).value
@@ -177,6 +207,17 @@ const registrarMovimiento = async () => {
     } else {
       mensaje.value = 'Movimiento guardado correctamente.'
       mensajeTipo.value = 'exito'
+    }
+    formularioMovimiento.value = {
+      fecha: toLocalInputUTCMinus5(new Date()),
+      tipo: 'EGRESO',
+      monto: 0,
+      concepto: '',
+      nota: '',
+      proveedor_id: 0,
+      caja_id: 1,
+      usuario_id: getSessionUserId() ?? 0,
+      venta_id: null
     }
   } catch (err) {
     console.error('Error al registrar movimiento', err)
@@ -289,62 +330,6 @@ const guardarEditarEgreso = async () => {
     guardandoEgreso.value = false
   }
 }
-
-const eliminarEgreso = async (item: MovimientoEgreso) => {
-  if (!item?.id) return
-  const confirmar = window.confirm('¿Eliminar este egreso?')
-  if (!confirmar) return
-  eliminandoEgreso.value = item.id
-  try {
-    const respuesta = await fetch(`${ENDPOINTS.CONTABILIDAD_MOVIMIENTOS}${item.id}`, { method: 'DELETE' })
-    if (!respuesta.ok) {
-      const detalle = await respuesta.text().catch(() => '')
-      throw new Error(detalle || `Error ${respuesta.status}`)
-    }
-    egresos.value = egresos.value.filter((registro) => registro.id !== item.id)
-    resumen[1].valor = formatearMoneda(totalEgresos.value)
-  } catch (err) {
-    const detalle = err instanceof Error ? err.message : String(err)
-    errorEgresos.value = `No fue posible eliminar egreso. ${detalle}`
-  } finally {
-    eliminandoEgreso.value = null
-  }
-}
-
-const actualizarMovimiento = async (item: MovimientoEgreso) => {
-  if (!item?.id) return
-  actualizandoMovimiento.value = item.id
-  try {
-    const payload = {
-      fecha: item.fecha || new Date().toISOString(),
-      tipo: (item.tipo || 'EGRESO') as 'EGRESO' | 'INGRESO',
-      monto: Number(item.monto ?? 0),
-      concepto: item.concepto || '',
-      nota: item.nota || '',
-      proveedor_id: Number(item.proveedor_id ?? 0),
-      caja_id: Number(item.caja_id ?? 0),
-      usuario_id: Number(item.usuario_id ?? getSessionUserId() ?? 0),
-      venta_id: item.venta_id ? Number(item.venta_id) : 0
-    }
-    const respuesta = await fetch(`${ENDPOINTS.CONTABILIDAD_MOVIMIENTOS}${item.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    })
-    if (!respuesta.ok) {
-      const detalle = await respuesta.text().catch(() => '')
-      throw new Error(detalle || `Error ${respuesta.status}`)
-    }
-    await cargarEgresos()
-  } catch (err) {
-    console.error('Error al actualizar movimiento', err)
-    const detalle = err instanceof Error ? err.message : String(err)
-    errorEgresos.value = `No fue posible actualizar el movimiento. ${detalle}`
-  } finally {
-    actualizandoMovimiento.value = null
-  }
-}
-
 
 const cerrarFormularioMovimiento = () => {
   mostrarFormularioMovimiento.value = false
@@ -569,6 +554,22 @@ onMounted(() => {
         <span :class="['tarjeta__estado', `tarjeta__estado--${resumen[1].estado}`]">
           {{ resumen[1].estado }}
         </span>
+      </article>
+      <article class="tarjeta">
+        <div>
+          <p class="tarjeta__titulo">Caja</p>
+          <p class="tarjeta__valor">{{ formatearMoneda(totalCaja) }}</p>
+          <p class="tarjeta__detalle">Mes actual</p>
+        </div>
+        <span class="tarjeta__estado">estable</span>
+      </article>
+      <article class="tarjeta">
+        <div>
+          <p class="tarjeta__titulo">Rinonera</p>
+          <p class="tarjeta__valor">{{ formatearMoneda(totalRinonera) }}</p>
+          <p class="tarjeta__detalle">Mes actual</p>
+        </div>
+        <span class="tarjeta__estado">estable</span>
       </article>
     </section>
 
@@ -924,12 +925,8 @@ onMounted(() => {
 
 .contabilidad__resumen {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr);
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 0.9rem;
-}
-
-.contabilidad__resumen .tarjeta {
-  max-width: 12.5%;
 }
 
 .tarjeta {
@@ -1028,6 +1025,7 @@ onMounted(() => {
   white-space: nowrap;
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
 }
+
 
 .tabla__encabezado {
   display: flex;

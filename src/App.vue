@@ -12,6 +12,7 @@ import LoginView from './views/LoginView.vue'
 import ResumenVentasView from './views/ResumenVentasView.vue'
 import PrestamoCajasView from './views/PrestamoCajasView.vue'
 import CierreCajaView from './views/CierreCajaView.vue'
+import CierreCajaHistoricoView from './views/CierreCajaHistoricoView.vue'
 import MenuPrincipalView from './views/MenuPrincipalView.vue'
 import { ENDPOINTS } from './config/endpoints'
 import { getSessionUserId } from './utils/session'
@@ -29,6 +30,7 @@ type VistaId =
   | 'resumen-ventas'
   | 'prestamo-cajas'
   | 'cierre-caja'
+  | 'cierre-historico'
 
 const vistaActiva = ref<VistaId>('pos')
 const sesionIniciada = ref(false)
@@ -89,7 +91,8 @@ const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componen
   { id: 'ventas-pendientes', nombre: 'Ventas pendientes', descripcion: 'Recuperar ventas', componente: VentasPendientesView },
   { id: 'resumen-ventas', nombre: 'Resumen ventas', descripcion: 'Resumen diario de ventas', componente: ResumenVentasView },
   { id: 'prestamo-cajas', nombre: 'Prestamo cajas', descripcion: 'Control de cajas prestadas', componente: PrestamoCajasView },
-  { id: 'cierre-caja', nombre: 'Cierre caja', descripcion: 'Resumen y cierre del turno', componente: CierreCajaView }
+  { id: 'cierre-caja', nombre: 'Cierre caja', descripcion: 'Resumen y cierre del turno', componente: CierreCajaView },
+  { id: 'cierre-historico', nombre: 'Historico cierre', descripcion: 'Historial de cierres de caja', componente: CierreCajaHistoricoView }
 ]
 
 const tieneCajaSeleccionada = computed(() => Number.isFinite(sesionCajaId.value) && Number(sesionCajaId.value) > 0)

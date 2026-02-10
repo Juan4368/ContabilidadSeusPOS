@@ -41,6 +41,11 @@ const seleccionarVista = (vistaId: string) => {
 
 <template>
   <section class="menu">
+    <div class="menu__acciones">
+      <button type="button" class="menu__toggle" @click="seleccionarVista('cierre-historico')">
+        Historico de cierre
+      </button>
+    </div>
     <div class="menu__grid">
       <button
         v-for="vista in props.vistas"

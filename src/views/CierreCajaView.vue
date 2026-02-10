@@ -36,7 +36,6 @@ const totalEfectivo = computed(() =>
 const formatMoney = (value: number) =>
   value.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })
 
-const formatearDecimal = (value: number) => Number(value || 0).toFixed(2)
 
 const fechaConteoIso = computed(() => {
   const base = fechaCierre.value?.trim()
@@ -92,6 +91,12 @@ const cargarDenominaciones = async () => {
   }
 }
 
+const CIERRE_CAJA_BULK_URL = 'http://127.0.0.1:8000/contabilidad/cierre-caja-denominaciones/bulk'
+
+const abrirHistorico = () => {
+  window.dispatchEvent(new CustomEvent('app:cambiar-vista', { detail: { vista: 'cierre-historico' } }))
+}
+
 const guardarCierre = async () => {
   if (!cajaId.value) {
     error.value = 'No hay caja seleccionada en la sesión.'
@@ -105,25 +110,32 @@ const guardarCierre = async () => {
     if (!usuarioId) {
       throw new Error('No se pudo identificar el usuario de la sesión.')
     }
-    const payload = denominaciones.map((denom) => ({
-      caja_id: cajaId.value as number,
-      usuario_id: usuarioId,
-      denominacion: formatearDecimal(denom),
-      cantidad: Number(cantidades.value[denom] ?? 0),
-      subtotal: formatearDecimal(denom * Number(cantidades.value[denom] ?? 0)),
-      fecha_conteo: fechaConteoIso.value
-    }))
-    let respuesta = await fetch(ENDPOINTS.CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES_BULK, {
+    const payload = denominaciones
+      .map((denom) => {
+        const cantidad = Number(cantidades.value[denom] ?? 0)
+        return {
+          caja_id: cajaId.value as number,
+          usuario_id: usuarioId,
+          denominacion: Number(denom),
+          cantidad,
+          fecha_conteo: fechaConteoIso.value
+        }
+      })
+      .filter((item) => item.cantidad > 0)
+    if (payload.length === 0) {
+      throw new Error('Ingresa al menos una denominacion con cantidad mayor a cero.')
+    }
+    let respuesta = await fetch(CIERRE_CAJA_BULK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: payload })
+      body: JSON.stringify(payload)
     })
     if (!respuesta.ok && respuesta.status === 422) {
-      // Compatibilidad: algunos backends esperan arreglo directo en lugar de objeto.
-      respuesta = await fetch(ENDPOINTS.CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES_BULK, {
+      // Compatibilidad: algunos backends esperan objeto con items.
+      respuesta = await fetch(CIERRE_CAJA_BULK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ items: payload })
       })
     }
     if (!respuesta.ok) {
@@ -131,6 +143,13 @@ const guardarCierre = async () => {
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     mensaje.value = 'Cierre guardado correctamente.'
+    fechaCierre.value = toLocalInputUTCMinus5(new Date())
+    for (const denom of denominaciones) {
+      cantidades.value[denom] = 0
+    }
+    setTimeout(() => {
+      mensaje.value = null
+    }, 3000)
   } catch (err) {
     const detalle = err instanceof Error ? err.message : String(err)
     error.value = `No se pudo guardar cierre. ${detalle}`
@@ -158,7 +177,8 @@ onMounted(() => {
       </div>
       <div class="topbar__right">
         <button type="button" class="boton secundaria">Imprimir</button>
-        <button type="button" class="boton primario" :disabled="guardando || !cajaId" @click="guardarCierre">
+        <button type="button" class="boton secundaria" @click="abrirHistorico">Historico</button>
+        <button type="button" class="boton primario" :disabled="guardando" @click="guardarCierre">
           {{ guardando ? 'Guardando...' : 'Guardar cierre' }}
         </button>
       </div>
@@ -204,10 +224,10 @@ onMounted(() => {
           </div>
         </dl>
 
-        <p v-if="cargando" class="nota-ayuda">Cargando denominaciones...</p>
+        <p v-if="!cajaId" class="nota-error">No hay caja seleccionada en la sesión.</p>
+        <p v-else-if="cargando" class="nota-ayuda">Cargando denominaciones...</p>
         <p v-if="mensaje" class="nota-ok">{{ mensaje }}</p>
         <p v-if="error" class="nota-error">{{ error }}</p>
-        <p class="nota-ayuda">Se guarda en {{ ENDPOINTS.CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES_BULK }}</p>
       </section>
     </section>
   </main>

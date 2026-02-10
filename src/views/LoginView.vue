@@ -31,13 +31,9 @@ const enviar = () => {
   <main class="login">
     <section class="login__card">
       <header class="login__header">
-        <div>
-          <p class="login__overline">Acceso</p>
-          <h1>Inicia sesión</h1>
-          <p class="login__sub">Ingresa tu usuario y contraseña para continuar.</p>
-        </div>
-        <div class="login__logo">
-          <img src="/logo-placeholder.svg" alt="Logo de prueba" />
+        <div class="login__texto">
+          <p class="login__marca">AutoServicio el Paisa</p>
+          <p class="login__sub">Ingresa tu usuario y contrasena para continuar.</p>
         </div>
       </header>
       <form class="login__form" @submit.prevent="enviar">
@@ -45,7 +41,7 @@ const enviar = () => {
           <span>Usuario</span>
           <input v-model="usuario" type="text" autocomplete="username" />
         </label>        <label>
-          <span>Contraseña</span>
+          <span>Contrasena</span>
           <div class="login__password">
             <input
               v-model="contrasena"
@@ -93,17 +89,23 @@ const enviar = () => {
 
 .login__header {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 1rem;
+  gap: 0.75rem;
   align-items: center;
+  justify-items: center;
+  text-align: center;
 }
 
-.login__logo img {
-  width: 180px;
-  max-width: 100%;
-  height: auto;
-  border-radius: 0.75rem;
-  border: 1px solid rgba(148, 163, 184, 0.25);
+.login__texto {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.login__marca {
+  margin: 0.1rem 0 0.3rem;
+  font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+  font-weight: 800;
+  color: #22c55e;
+  letter-spacing: 0.02em;
 }
 
 .login__overline {
