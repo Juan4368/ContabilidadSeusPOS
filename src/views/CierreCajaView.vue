@@ -13,7 +13,7 @@ const toLocalInputUTCMinus5 = (date: Date) => {
 }
 
 const fechaCierre = ref(toLocalInputUTCMinus5(new Date()))
-const cajaId = ref<number | null>(null)
+const cajaId = ref<number>(1)
 const cargando = ref(false)
 const guardando = ref(false)
 const mensaje = ref<string | null>(null)
@@ -98,10 +98,6 @@ const abrirHistorico = () => {
 }
 
 const guardarCierre = async () => {
-  if (!cajaId.value) {
-    error.value = 'No hay caja seleccionada en la sesión.'
-    return
-  }
   guardando.value = true
   error.value = null
   mensaje.value = null
@@ -159,8 +155,10 @@ const guardarCierre = async () => {
 }
 
 onMounted(() => {
-  cajaId.value = obtenerCajaSesion()
-  void cargarDenominaciones()
+  cajaId.value = obtenerCajaSesion() ?? 1
+  for (const denom of denominaciones) {
+    cantidades.value[denom] = 0
+  }
 })
 </script>
 
@@ -224,8 +222,7 @@ onMounted(() => {
           </div>
         </dl>
 
-        <p v-if="!cajaId" class="nota-error">No hay caja seleccionada en la sesión.</p>
-        <p v-else-if="cargando" class="nota-ayuda">Cargando denominaciones...</p>
+        <p v-if="cargando" class="nota-ayuda">Cargando denominaciones...</p>
         <p v-if="mensaje" class="nota-ok">{{ mensaje }}</p>
         <p v-if="error" class="nota-error">{{ error }}</p>
       </section>

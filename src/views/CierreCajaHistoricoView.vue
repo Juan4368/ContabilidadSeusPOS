@@ -25,17 +25,11 @@ type Caja = {
   descripcion?: string
 }
 
-const fechaHoy = () => {
-  const hoy = new Date()
-  const pad = (num: number) => num.toString().padStart(2, '0')
-  return `${hoy.getFullYear()}-${pad(hoy.getMonth() + 1)}-${pad(hoy.getDate())}`
-}
-
 const registros = ref<RegistroCierre[]>([])
 const cargando = ref(false)
 const error = ref<string | null>(null)
-const filtroDesde = ref(fechaHoy())
-const filtroHasta = ref(fechaHoy())
+const filtroDesde = ref('')
+const filtroHasta = ref('')
 const usuariosPorId = ref<Record<number, string>>({})
 const cajasPorId = ref<Record<number, string>>({})
 
@@ -48,11 +42,14 @@ const normalizarFecha = (valor?: string | null) => {
   return Number.isNaN(dt.getTime()) ? null : dt
 }
 
+const obtenerFechaRegistro = (item: RegistroCierre & { fecha_cierre?: string | null }) =>
+  item.fecha_conteo ?? item.fecha_cierre ?? null
+
 const registrosFiltrados = computed(() => {
   const desde = filtroDesde.value ? new Date(`${filtroDesde.value}T00:00:00`) : null
   const hasta = filtroHasta.value ? new Date(`${filtroHasta.value}T23:59:59`) : null
   return registros.value.filter((item) => {
-    const fecha = normalizarFecha(item.fecha_conteo)
+    const fecha = normalizarFecha(obtenerFechaRegistro(item))
     if (desde && (!fecha || fecha < desde)) return false
     if (hasta && (!fecha || fecha > hasta)) return false
     return true
@@ -121,7 +118,13 @@ const cargarHistorico = async () => {
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = await respuesta.json()
-    const lista = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
+    const lista = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.results)
+          ? data.results
+          : []
     registros.value = (lista as RegistroCierre[]).slice().reverse()
     const ids = Array.from(
       new Set(
@@ -160,6 +163,10 @@ onMounted(() => {
         <h1>Historico de cierres</h1>
         <p class="historico__sub">Consulta los cierres guardados por fecha.</p>
       </div>
+      <div class="historico__resumen">
+        <span class="historico__resumen-label">Total filtrado</span>
+        <strong class="historico__resumen-valor">{{ formatearMoneda(totalFiltrado) }}</strong>
+      </div>
       <div class="historico__filtros">
         <label>
           <span>Desde</span>
@@ -176,9 +183,6 @@ onMounted(() => {
     </header>
 
     <section class="historico__tabla">
-      <div class="historico__totales">
-        <span>Total filtrado: {{ formatearMoneda(totalFiltrado) }}</span>
-      </div>
       <p v-if="error" class="nota-error">{{ error }}</p>
       <p v-if="!cargando && registrosFiltrados.length === 0" class="nota-ayuda">Sin registros.</p>
       <table v-else class="tabla__grid">
@@ -202,7 +206,7 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-for="item in registrosFiltrados" :key="item.id ?? `${item.caja_id}-${item.fecha_conteo}`">
-            <td>{{ item.fecha_conteo || '-' }}</td>
+            <td>{{ obtenerFechaRegistro(item) || '-' }}</td>
             <td>{{ obtenerNombreCaja(item.caja_id) }}</td>
             <td>{{ obtenerNombreUsuario(item.usuario_id) }}</td>
             <td class="col-num">{{ Number(item.denominacion ?? 0).toLocaleString('es-CO') }}</td>
@@ -235,6 +239,28 @@ onMounted(() => {
   border-radius: 1rem;
   border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(12, 14, 18, 0.8);
+}
+
+.historico__resumen {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: rgba(14, 20, 28, 0.9);
+  min-width: 200px;
+}
+
+.historico__resumen-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+}
+
+.historico__resumen-valor {
+  font-size: 1.1rem;
+  color: #a7f3d0;
 }
 
 .historico__overline {
@@ -279,12 +305,6 @@ onMounted(() => {
   background: rgba(13, 15, 20, 0.88);
   padding: 0.75rem;
   overflow-x: auto;
-}
-
-.historico__totales {
-  margin-bottom: 0.6rem;
-  color: #bbf7d0;
-  font-weight: 700;
 }
 
 .tabla__grid {
