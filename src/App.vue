@@ -104,13 +104,6 @@ const vistas: Array<{ id: VistaId; nombre: string; descripcion: string; componen
 const tieneCajaSeleccionada = computed(() => Number.isFinite(sesionCajaId.value) && Number(sesionCajaId.value) > 0)
 const cajaAbiertaEnSesion = computed(() => Number.isFinite(sesionCajaId.value) && Number(sesionCajaId.value) > 0)
 
-const vistasDisponibles = computed(() =>
-  vistas.filter(
-    (vista) =>
-      vista.id === 'menu-principal' || vista.id === 'pos' || vista.id === 'ventas-pendientes'
-  )
-)
-
 const componenteActual = computed(() => vistas.find((vista) => vista.id === vistaActiva.value)?.componente ?? POSView)
 
 const vistasMenuPrincipal = computed(() => vistas.filter((vista) => vista.id !== 'menu-principal'))

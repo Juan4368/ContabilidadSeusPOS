@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ENDPOINTS } from '../config/endpoints'
 import { getSessionUserId } from '../utils/session'
 
 const toLocalInputUTCMinus5 = (date: Date) => {
@@ -14,7 +13,6 @@ const toLocalInputUTCMinus5 = (date: Date) => {
 
 const fechaCierre = ref(toLocalInputUTCMinus5(new Date()))
 const cajaId = ref<number>(1)
-const cargando = ref(false)
 const guardando = ref(false)
 const mensaje = ref<string | null>(null)
 const error = ref<string | null>(null)
@@ -59,37 +57,6 @@ const obtenerCajaSesion = () => {
   }
 }
 
-const cargarDenominaciones = async () => {
-  if (!cajaId.value) return
-  cargando.value = true
-  error.value = null
-  try {
-    const respuesta = await fetch(ENDPOINTS.CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES)
-    if (!respuesta.ok) {
-      const detalle = await respuesta.text().catch(() => '')
-      throw new Error(detalle || `Error ${respuesta.status}`)
-    }
-    const data = await respuesta.json()
-    const lista = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
-    const registrosCaja = (lista as Array<Record<string, unknown>>).filter(
-      (item) => Number(item.caja_id ?? 0) === cajaId.value
-    )
-    for (const denom of denominaciones) {
-      cantidades.value[denom] = 0
-    }
-    for (const item of registrosCaja) {
-      const denom = Number(item.denominacion ?? 0)
-      if (!denominaciones.includes(denom as (typeof denominaciones)[number])) continue
-      const cantidad = Number(item.cantidad ?? 0)
-      cantidades.value[denom] = Number.isFinite(cantidad) && cantidad > 0 ? cantidad : 0
-    }
-  } catch (err) {
-    const detalle = err instanceof Error ? err.message : String(err)
-    error.value = `No se pudo cargar cierre de caja. ${detalle}`
-  } finally {
-    cargando.value = false
-  }
-}
 
 const CIERRE_CAJA_BULK_URL = 'http://127.0.0.1:8000/contabilidad/cierre-caja-denominaciones/bulk'
 
@@ -222,7 +189,6 @@ onMounted(() => {
           </div>
         </dl>
 
-        <p v-if="cargando" class="nota-ayuda">Cargando denominaciones...</p>
         <p v-if="mensaje" class="nota-ok">{{ mensaje }}</p>
         <p v-if="error" class="nota-error">{{ error }}</p>
       </section>

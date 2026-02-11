@@ -113,26 +113,6 @@ const formatearMoneda = (valor: string | number) => {
     : String(valor)
 }
 
-const totalEgresos = computed(() =>
-  egresos.value.reduce((total, item) => total + Number(item.monto ?? 0), 0)
-)
-
-const egresosHoy = computed(() => {
-  const hoy = fechaHoy()
-  const desde = new Date(`${hoy}T00:00:00`)
-  const hasta = new Date(`${hoy}T23:59:59`)
-  return egresos.value.filter((item) => {
-    const fechaRaw = item.fecha_dia_hora || item.fecha
-    const fecha = fechaRaw ? new Date(fechaRaw) : null
-    if (!fecha) return false
-    return fecha >= desde && fecha <= hasta
-  })
-})
-
-const totalEgresosHoy = computed(() =>
-  egresosHoy.value.reduce((total, item) => total + Number(item.monto ?? 0), 0)
-)
-
 const egresosFiltrados = computed(() => {
   const desde = filtroFechaDesde.value ? new Date(`${filtroFechaDesde.value}T00:00:00`) : null
   const hasta = filtroFechaHasta.value ? new Date(`${filtroFechaHasta.value}T23:59:59`) : null
@@ -151,18 +131,6 @@ const egresosFiltrados = computed(() => {
 const totalEgresosFiltrados = computed(() =>
   egresosFiltrados.value.reduce((total, item) => total + Number(item.monto ?? 0), 0)
 )
-
-const detalleFiltro = computed(() => {
-  const desde = filtroFechaDesde.value?.trim()
-  const hasta = filtroFechaHasta.value?.trim()
-  if (desde && hasta) {
-    if (desde === hasta) return `Día ${desde}`
-    return `Rango ${desde} - ${hasta}`
-  }
-  if (desde) return `Desde ${desde}`
-  if (hasta) return `Hasta ${hasta}`
-  return 'Sin filtro'
-})
 
 const normalizarNota = (valor?: string) =>
   (valor ?? '')
