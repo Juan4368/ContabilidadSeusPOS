@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-const HISTORICO_CIERRE_URL = 'http://127.0.0.1:8000/contabilidad/cierre-caja-denominaciones/'
+import { ENDPOINTS } from '../config/endpoints'
+
+const HISTORICO_CIERRE_URL = ENDPOINTS.CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES
 
 type RegistroCierre = {
   id?: number
@@ -73,7 +75,7 @@ const obtenerNombreCaja = (id?: number | null) => {
 const cargarUsuarios = async (ids: number[]) => {
   const pendientes = ids.filter((id) => Number.isFinite(id) && !usuariosPorId.value[id])
   if (pendientes.length === 0) return
-  const baseUrl = 'http://127.0.0.1:8000/usuarios/'
+  const baseUrl = ENDPOINTS.USUARIOS
   await Promise.all(
     pendientes.map(async (id) => {
       try {
@@ -92,7 +94,7 @@ const cargarUsuarios = async (ids: number[]) => {
 const cargarCajas = async (ids: number[]) => {
   const pendientes = ids.filter((id) => Number.isFinite(id) && !cajasPorId.value[id])
   if (pendientes.length === 0) return
-  const baseUrl = 'http://127.0.0.1:8000/contabilidad/cajas/'
+  const baseUrl = ENDPOINTS.CONTABILIDAD_CAJAS
   await Promise.all(
     pendientes.map(async (id) => {
       try {

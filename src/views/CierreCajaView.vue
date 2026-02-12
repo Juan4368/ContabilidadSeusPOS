@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ENDPOINTS } from '../config/endpoints'
 import { getSessionUserId } from '../utils/session'
 
 const toLocalInputUTCMinus5 = (date: Date) => {
@@ -58,7 +59,7 @@ const obtenerCajaSesion = () => {
 }
 
 
-const CIERRE_CAJA_BULK_URL = 'http://127.0.0.1:8000/contabilidad/cierre-caja-denominaciones/bulk'
+const CIERRE_CAJA_BULK_URL = ENDPOINTS.CONTABILIDAD_CIERRE_CAJA_DENOMINACIONES_BULK
 
 const abrirHistorico = () => {
   window.dispatchEvent(new CustomEvent('app:cambiar-vista', { detail: { vista: 'cierre-historico' } }))
