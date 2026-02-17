@@ -62,6 +62,34 @@ const totalFiltrado = computed(() =>
   registrosFiltrados.value.reduce((acc, item) => acc + Number(item.subtotal ?? 0), 0)
 )
 
+const graficaBarras = computed(() => {
+  const acumulado = new Map<string, number>()
+  for (const item of registrosFiltrados.value) {
+    const fecha = normalizarFecha(obtenerFechaRegistro(item))
+    if (!fecha) continue
+    const claveFecha = fecha.toISOString().slice(0, 10)
+    acumulado.set(claveFecha, (acumulado.get(claveFecha) ?? 0) + Number(item.subtotal ?? 0))
+  }
+
+  const serie = Array.from(acumulado.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-14)
+
+  const maximo = Math.max(...serie.map(([, total]) => total), 0)
+  return serie.map(([fecha, total]) => {
+    const alturaPct = maximo <= 0 ? 8 : Math.max((total / maximo) * 100, 8)
+    return {
+      fecha,
+      total,
+      alturaPct,
+      etiqueta: new Date(`${fecha}T00:00:00`).toLocaleDateString('es-CO', {
+        month: 'short',
+        day: '2-digit'
+      })
+    }
+  })
+})
+
 const obtenerNombreUsuario = (id?: number | null) => {
   if (!id) return '-'
   return usuariosPorId.value[id] ?? String(id)
@@ -183,6 +211,22 @@ onMounted(() => {
         </button>
       </div>
     </header>
+
+    <section class="historico__grafica">
+      <div class="historico__grafica-header">
+        <h2>Totales por cierre (ultimos 14 dias)</h2>
+      </div>
+      <p v-if="graficaBarras.length === 0" class="nota-ayuda">No hay datos para graficar con el filtro actual.</p>
+      <div v-else class="barras">
+        <div v-for="barra in graficaBarras" :key="barra.fecha" class="barra-item">
+          <span class="barra-item__valor">{{ formatearMoneda(barra.total) }}</span>
+          <div class="barra-item__columna">
+            <div class="barra-item__relleno" :style="{ height: `${barra.alturaPct}%` }" />
+          </div>
+          <span class="barra-item__fecha">{{ barra.etiqueta }}</span>
+        </div>
+      </div>
+    </section>
 
     <section class="historico__tabla">
       <p v-if="error" class="nota-error">{{ error }}</p>
@@ -307,6 +351,66 @@ onMounted(() => {
   background: rgba(13, 15, 20, 0.88);
   padding: 0.75rem;
   overflow-x: auto;
+}
+
+.historico__grafica {
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(13, 15, 20, 0.88);
+  padding: 0.9rem;
+}
+
+.historico__grafica-header h2 {
+  margin: 0 0 0.8rem;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  font-weight: 700;
+}
+
+.barras {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.barra-item {
+  display: grid;
+  gap: 0.35rem;
+  align-items: end;
+}
+
+.barra-item__valor {
+  font-size: 0.7rem;
+  color: #9bd2ff;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.barra-item__columna {
+  height: 150px;
+  border-radius: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.3), rgba(15, 23, 42, 0.8));
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+
+.barra-item__relleno {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 0.55rem 0.55rem 0 0;
+  background: linear-gradient(180deg, #38bdf8, #0ea5e9);
+}
+
+.barra-item__fecha {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  text-align: center;
+  text-transform: uppercase;
 }
 
 .tabla__grid {
