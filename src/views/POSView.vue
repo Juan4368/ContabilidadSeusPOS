@@ -41,6 +41,7 @@ type Cliente = {
 type ResumenCobro = {
   subtotal: number
   descuento: number
+  bolsa: number
   total: number
   pagoRecibido: number
   cambio: number
@@ -51,6 +52,8 @@ const CLIENTES_ENDPOINT = ENDPOINTS.CLIENTES
 const VENTAS_ENDPOINT = ENDPOINTS.VENTAS_POS
 const DEFAULT_PROVEEDOR_ID = 0
 const DEFAULT_CAJA_ID = 1
+const PRECIO_BOLSA = 300
+const BOLSA_PRODUCTO_ID = 1
 
 const getSessionCajaNombre = () => {
   try {
@@ -92,6 +95,7 @@ const ultimaAccion = ref('Listo para vender')
 const ventaId = ref<number>(Date.now())
 const fechaVenta = ref(nowUTCMinus5Iso())
 const tipoPago = ref('efectivo')
+const cantidadBolsas = ref(0)
 const estadoVenta = ref(true)
 const ventaPendienteId = ref<number | null>(null)
 const payloadVenta = ref<Record<string, unknown> | null>(null)
@@ -104,6 +108,7 @@ const payloadVentaTexto = computed(() => (payloadVenta.value ? JSON.stringify(pa
 const resumenCobro = ref<ResumenCobro>({
   subtotal: 0,
   descuento: 0,
+  bolsa: 0,
   total: 0,
   pagoRecibido: 0,
   cambio: 0,
@@ -113,6 +118,16 @@ const pagoRecibidoModalInput = ref('')
 const parsePesos = (valor: string) => Number(String(valor).replace(/[^\d]/g, '')) || 0
 const pagoRecibidoModalValor = computed(() => parsePesos(pagoRecibidoModalInput.value))
 const cambioModal = computed(() => Math.max(pagoRecibidoModalValor.value - resumenCobro.value.total, 0))
+const normalizarCantidadBolsaValor = (valor: number) => {
+  if (!Number.isFinite(valor)) return 0
+  return Math.max(0, Math.trunc(valor))
+}
+const actualizarCantidadBolsa = (delta: number) => {
+  cantidadBolsas.value = normalizarCantidadBolsaValor(cantidadBolsas.value + delta)
+}
+const normalizarCantidadBolsa = () => {
+  cantidadBolsas.value = normalizarCantidadBolsaValor(cantidadBolsas.value)
+}
 const onPagoRecibidoModalInput = (event: Event) => {
   const value = (event.target as HTMLInputElement).value
   pagoRecibidoModalInput.value = formatCurrency(parsePesos(value))
@@ -163,6 +178,20 @@ const abrirModalDescuento = (item: ItemCarrito) => {
 const cerrarModalDescuento = () => {
   descuentoItem.value = null
 }
+
+const extraerCantidadBolsasDesdeDetalles = (detalles: unknown) => {
+  if (!Array.isArray(detalles)) return 0
+  return detalles.reduce((acumulado, item) => {
+    if (!item || typeof item !== 'object') return acumulado
+    const detalle = item as Record<string, unknown>
+    const id = Number(detalle.producto_id ?? detalle.productoId ?? detalle.id ?? 0)
+    if (id !== BOLSA_PRODUCTO_ID) return acumulado
+    const cantidad = Number(detalle.cantidad ?? 0)
+    if (!Number.isFinite(cantidad) || cantidad <= 0) return acumulado
+    return acumulado + cantidad
+  }, 0)
+}
+
 const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
   if (!Array.isArray(detalles)) return []
   return detalles
@@ -171,6 +200,7 @@ const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
       const detalle = item as Record<string, unknown>
       const id = Number(detalle.producto_id ?? detalle.productoId ?? detalle.id ?? 0)
       if (!id) return null
+      if (id === BOLSA_PRODUCTO_ID) return null
       const nombreBackend = detalle.producto_nombre ?? detalle.nombre
       const productoLocal = productos.value.find((producto) => producto.backendId === id || producto.id === id)
       const nombre = String(nombreBackend ?? productoLocal?.nombre ?? `Producto ${id}`)
@@ -209,6 +239,7 @@ const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
     estadoVenta.value = venta.estado
   }
   const detalles = venta.detalles ?? venta.items ?? []
+  cantidadBolsas.value = normalizarCantidadBolsaValor(extraerCantidadBolsasDesdeDetalles(detalles))
   carrito.value = mapearItemsPendientes(detalles)
   ultimaAccion.value = `Venta #${ventaId.value} cargada`
 }
@@ -539,7 +570,7 @@ const resumenCarrito = computed(() => {
   const descuentoLineas = subtotalBruto - subtotalConLineas
   const descuentoGlobal = 0
   const baseImponible = Math.max(subtotalConLineas - descuentoGlobal, 0)
-  const impuesto = 0
+  const impuesto = normalizarCantidadBolsaValor(cantidadBolsas.value) * PRECIO_BOLSA
   const total = Math.max(baseImponible + impuesto, 0)
   const cambio = Math.max(Number(pagoRecibido.value) - total, 0)
 
@@ -631,12 +662,17 @@ const resumenDescuentoLinea = (item: ItemCarrito) => {
 }
 
 const agregarAlCarrito = (producto: Producto) => {
-  const existente = carrito.value.find((item) => item.id === producto.id)
+  const indiceExistente = carrito.value.findIndex((item) => item.id === producto.id)
+  const existente = indiceExistente >= 0 ? carrito.value[indiceExistente] : null
   if (existente) {
     existente.cantidad++
+    if (indiceExistente > 0) {
+      carrito.value.splice(indiceExistente, 1)
+      carrito.value.unshift(existente)
+    }
   } else {
     const descuentoCliente = descuentoPorDefectoCliente()
-    carrito.value.push({
+    carrito.value.unshift({
       id: producto.id,
       backendId: producto.backendId,
       nombre: producto.nombre,
@@ -675,7 +711,30 @@ const eliminarItem = (id: number) => {
 const limpiarCarrito = () => {
   carrito.value = []
   pagoRecibido.value = 0
+  cantidadBolsas.value = 0
   ultimaAccion.value = 'Carrito limpio'
+}
+
+const construirDetallesVenta = () => {
+  const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
+  const detalles = carrito.value.map((item) => ({
+    producto_id: item.backendId ?? item.id,
+    cantidad: item.cantidad,
+    precio_unitario: redondear2(item.precio),
+    subtotal: redondear2(calcularLinea(item).base)
+  }))
+
+  const cantidadBolsa = normalizarCantidadBolsaValor(cantidadBolsas.value)
+  if (cantidadBolsa > 0) {
+    detalles.push({
+      producto_id: BOLSA_PRODUCTO_ID,
+      cantidad: cantidadBolsa,
+      precio_unitario: redondear2(PRECIO_BOLSA),
+      subtotal: redondear2(PRECIO_BOLSA * cantidadBolsa)
+    })
+  }
+
+  return detalles
 }
 
 const construirPayloadVenta = (estadoOverride?: boolean) => {
@@ -695,12 +754,7 @@ const construirPayloadVenta = (estadoOverride?: boolean) => {
     impuesto: 0,
     descuento: redondear2(resumenCarrito.value.descuentoLineas),
     fecha: nowUTCMinus5Iso(),
-    detalles: carrito.value.map((item) => ({
-      producto_id: item.backendId ?? item.id,
-      cantidad: item.cantidad,
-      precio_unitario: redondear2(item.precio),
-      subtotal: redondear2(calcularLinea(item).base)
-    }))
+    detalles: construirDetallesVenta()
   }
 }
 
@@ -725,12 +779,7 @@ const construirPayloadActualizacion = (estadoOverride?: boolean) => {
     numero_factura: numeroFacturaPayload,
     cliente_id: clientePayload,
     user_id: usuarioPayload,
-    detalles: carrito.value.map((item) => ({
-      producto_id: item.backendId ?? item.id,
-      cantidad: item.cantidad,
-      precio_unitario: redondear2(item.precio),
-      subtotal: redondear2(calcularLinea(item).base)
-    }))
+    detalles: construirDetallesVenta()
   }
 }
 
@@ -840,6 +889,7 @@ const cerrarVenta = async () => {
     const snapshot = {
       subtotal: resumenCarrito.value.subtotalBruto,
       descuento: resumenCarrito.value.descuentoLineas,
+      bolsa: resumenCarrito.value.impuesto,
       total: resumenCarrito.value.total,
       pagoRecibido: Number(pagoRecibido.value || 0),
       cambio: resumenCarrito.value.cambio,
@@ -1056,7 +1106,7 @@ const lineaIzqDer = (izq: string, der: string, width: number) => {
 
 const construirBytesEscPos = (
   items: ItemCarrito[],
-  resumen: { subtotal: number; descuento: number; total: number; pagoRecibido: number; cambio: number },
+  resumen: { subtotal: number; descuento: number; bolsa: number; total: number; pagoRecibido: number; cambio: number },
   numeroFactura?: string,
   widthMm = 80,
   scale = 1
@@ -1125,7 +1175,10 @@ const construirBytesEscPos = (
   if (resumen.descuento > 0) {
     add(lineaIzqDer('Ahorro', `-${formatCurrency(resumen.descuento)}`, widthChars))
   }
-  add(lineaIzqDer('Impuesto', formatCurrency(0), widthChars))
+  if (resumen.bolsa > 0) {
+    const cantidad = normalizarCantidadBolsaValor(Math.round(resumen.bolsa / PRECIO_BOLSA))
+    add(lineaIzqDer(`Bolsa x${cantidad}`, formatCurrency(resumen.bolsa), widthChars))
+  }
   setBold(true)
   add(lineaIzqDer('Total', formatCurrency(resumen.total), widthChars))
   setBold(false)
@@ -1229,7 +1282,7 @@ const escapeHtml = (value: string) =>
 
 const construirHtmlTicket = (
   items: ItemCarrito[],
-  resumen: { subtotal: number; descuento: number; total: number; pagoRecibido: number; cambio: number },
+  resumen: { subtotal: number; descuento: number; bolsa: number; total: number; pagoRecibido: number; cambio: number },
   numeroFactura?: string,
   widthMm = 80,
   scale = 1
@@ -1300,7 +1353,11 @@ const construirHtmlTicket = (
     <div class="separador"></div>
     <div class="fila"><span>Subtotal</span><span>${formatCurrency(resumen.subtotal)}</span></div>
     ${ahorro}
-    <div class="fila"><span>Impuesto</span><span>${formatCurrency(0)}</span></div>
+    ${
+      resumen.bolsa > 0
+        ? `<div class="fila"><span>Bolsa x${normalizarCantidadBolsaValor(Math.round(resumen.bolsa / PRECIO_BOLSA))}</span><span>${formatCurrency(resumen.bolsa)}</span></div>`
+        : ''
+    }
     <div class="fila total"><span>Total</span><span>${formatCurrency(resumen.total)}</span></div>
     <div class="fila"><span>Recibido</span><span>${formatCurrency(resumen.pagoRecibido)}</span></div>
     <div class="fila"><span>Cambio</span><span>${formatCurrency(resumen.cambio)}</span></div>
@@ -1313,6 +1370,7 @@ const imprimirTicket = async () => {
   const resumen = {
     subtotal: resumenCarrito.value.subtotalBruto,
     descuento: resumenCarrito.value.descuentoLineas,
+    bolsa: resumenCarrito.value.impuesto,
     total: resumenCarrito.value.total,
     pagoRecibido: Number(pagoRecibido.value || 0),
     cambio: resumenCarrito.value.cambio
@@ -1469,8 +1527,12 @@ const generarDocTicket = (items: ItemCarrito[], resumen: ResumenCobro, numeroFac
   doc.text('Desc. global', margin, y)
   doc.text(`-${formatCurrency(0)}`, right, y, { align: 'right' })
   y += lineHeight
-  doc.text('Impuesto', margin, y)
-  doc.text(formatCurrency(0), right, y, { align: 'right' })
+  if (resumen.bolsa > 0) {
+    const cantidad = normalizarCantidadBolsaValor(Math.round(resumen.bolsa / PRECIO_BOLSA))
+    doc.text(`Bolsa x${cantidad}`, margin, y)
+    doc.text(formatCurrency(resumen.bolsa), right, y, { align: 'right' })
+    y += lineHeight
+  }
   if (resumen.descuento > 0) {
     y += lineHeight
     doc.text('Ahorro', margin, y)
@@ -1487,6 +1549,7 @@ const guardarTicket = () => {
   const doc = generarDocTicket(carrito.value, {
     subtotal: resumenCarrito.value.subtotalBruto,
     descuento: resumenCarrito.value.descuentoLineas,
+    bolsa: resumenCarrito.value.impuesto,
     total: resumenCarrito.value.total,
     pagoRecibido: Number(pagoRecibido.value || 0),
     cambio: resumenCarrito.value.cambio
@@ -1692,7 +1755,7 @@ const imprimirTicketResumen = async () => {
                   @change="actualizarCantidad(item.id, 0)"
                 />
                 <button type="button" @click.stop="actualizarCantidad(item.id, 1)">+</button>
-                <button type="button" class="linea__eliminar" @click.stop="eliminarItem(item.id)">×</button>
+                <button type="button" class="linea__eliminar" @click.stop="eliminarItem(item.id)">x</button>
               </div>
               <div class="linea__precio-col">{{ formatCurrency(item.precio) }}</div>
               <div class="linea__totales">
@@ -1705,7 +1768,35 @@ const imprimirTicketResumen = async () => {
               </div>
             </div>
           </li>
-          <li v-if="carrito.length === 0" class="linea lineavacia">Sin productos aun</li>
+          <li v-if="cantidadBolsas > 0" class="linea linea--bolsa">
+            <div class="linea__fila">
+              <div class="linea__producto">
+                <div class="linea__principal">
+                  <p class="linea__titulo">Bolsa</p>
+                </div>
+                <small class="linea__codigo">Producto {{ BOLSA_PRODUCTO_ID }}</small>
+              </div>
+              <div class="linea__acciones">
+                <button type="button" @click.stop="actualizarCantidadBolsa(-1)">-</button>
+                <input
+                  v-model.number="cantidadBolsas"
+                  type="number"
+                  min="0"
+                  step="1"
+                  class="linea__cantidad"
+                  @change="normalizarCantidadBolsa"
+                />
+                <button type="button" @click.stop="actualizarCantidadBolsa(1)">+</button>
+                <button type="button" class="linea__eliminar" @click.stop="cantidadBolsas = 0">x</button>
+              </div>
+              <div class="linea__precio-col">{{ formatCurrency(PRECIO_BOLSA) }}</div>
+              <div class="linea__totales">
+                <strong>{{ formatCurrency(resumenCarrito.impuesto) }}</strong>
+                <small>Bolsa x{{ cantidadBolsas }}</small>
+              </div>
+            </div>
+          </li>
+          <li v-if="carrito.length === 0 && cantidadBolsas === 0" class="linea lineavacia">Sin productos aun</li>
         </ul>
       </section>
 
@@ -1787,6 +1878,20 @@ const imprimirTicketResumen = async () => {
             Nota rápida
             <input v-model="notaRapida" type="text" placeholder="Mesa 4, domicilio, etc." />
           </label>
+          <label class="bolsa-cantidad">
+            Bolsas ({{ formatCurrency(PRECIO_BOLSA) }} c/u)
+            <div class="bolsa-cantidad__control">
+              <button type="button" @click="actualizarCantidadBolsa(-1)">-</button>
+              <input
+                v-model.number="cantidadBolsas"
+                type="number"
+                min="0"
+                step="1"
+                @change="normalizarCantidadBolsa"
+              />
+              <button type="button" @click="actualizarCantidadBolsa(1)">+</button>
+            </div>
+          </label>
         </div>
 
         <dl class="totales">
@@ -1797,6 +1902,10 @@ const imprimirTicketResumen = async () => {
           <div>
             <dt>Desc. productos</dt>
             <dd>-{{ formatCurrency(resumenCarrito.descuentoLineas) }}</dd>
+          </div>
+          <div v-if="resumenCarrito.impuesto > 0">
+            <dt>Bolsa x{{ cantidadBolsas }}</dt>
+            <dd>{{ formatCurrency(resumenCarrito.impuesto) }}</dd>
           </div>
           <div class="total">
             <dt>Total</dt>
@@ -1847,7 +1956,12 @@ const imprimirTicketResumen = async () => {
               <span class="ticket__cantidad">x{{ item.cantidad }}</span>
               <span class="ticket__importe">{{ formatCurrency(totalLinea(item)) }}</span>
             </li>
-            <li v-if="carrito.length === 0" class="ticket__vacio">Sin productos aun</li>
+            <li v-if="cantidadBolsas > 0" class="ticket__linea ticket__linea--bolsa">
+              <span class="ticket__nombre">Bolsa</span>
+              <span class="ticket__cantidad">x{{ cantidadBolsas }}</span>
+              <span class="ticket__importe">{{ formatCurrency(resumenCarrito.impuesto) }}</span>
+            </li>
+            <li v-if="carrito.length === 0 && cantidadBolsas === 0" class="ticket__vacio">Sin productos aun</li>
           </ul>
           <div class="ticket__totales">
             <div>
@@ -1858,8 +1972,8 @@ const imprimirTicketResumen = async () => {
               <span>Ahorro</span>
               <strong>-{{ formatCurrency(resumenCarrito.descuentoLineas) }}</strong>
             </div>
-            <div>
-              <span>Impuesto</span>
+            <div v-if="resumenCarrito.impuesto > 0">
+              <span>Bolsa x{{ cantidadBolsas }}</span>
               <strong>{{ formatCurrency(resumenCarrito.impuesto) }}</strong>
             </div>
             <div class="ticket__total">
@@ -1970,6 +2084,10 @@ const imprimirTicketResumen = async () => {
           <div>
             <dt>Descuento</dt>
             <dd>-{{ formatCurrency(resumenCobro.descuento) }}</dd>
+          </div>
+          <div v-if="resumenCobro.bolsa > 0">
+            <dt>Bolsa x{{ Math.round(resumenCobro.bolsa / PRECIO_BOLSA) }}</dt>
+            <dd>{{ formatCurrency(resumenCobro.bolsa) }}</dd>
           </div>
           <div v-if="resumenCobro.descuento > 0">
             <dt>Ahorro</dt>
@@ -2425,6 +2543,10 @@ const imprimirTicketResumen = async () => {
   padding: 1.25rem 0;
 }
 
+.linea--bolsa {
+  border-style: dashed;
+}
+
 .linea__titulo {
   margin: 0;
   font-weight: 700;
@@ -2622,6 +2744,37 @@ const imprimirTicketResumen = async () => {
   color: #e2e8f0;
 }
 
+.bolsa-cantidad {
+  display: grid;
+  gap: 0.25rem;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.bolsa-cantidad__control {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  gap: 0.35rem;
+}
+
+.bolsa-cantidad__control button {
+  border-radius: 0.7rem;
+  border: 1px solid #4b4b4b;
+  background: #2c2c2c;
+  color: #e5e7eb;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.bolsa-cantidad__control button:hover {
+  border-color: #38bdf8;
+}
+
+.bolsa-cantidad__control input {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .totales {
   margin: 0;
   padding: 0.6rem 0.7rem;
@@ -2735,6 +2888,11 @@ const imprimirTicketResumen = async () => {
   grid-template-columns: 1fr auto auto;
   gap: 0.5rem;
   align-items: center;
+}
+
+.ticket__linea--bolsa {
+  border-top: 1px dashed #3a3a3a;
+  padding-top: 0.4rem;
 }
 
 .ticket__nombre {
