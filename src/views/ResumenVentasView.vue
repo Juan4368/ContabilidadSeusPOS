@@ -366,17 +366,40 @@ const formatFechaCorta = (valor: string) => {
 }
 
 const criterioBusqueda = ref('')
+const hoyIso = new Date().toISOString().slice(0, 10)
+const fechaDesde = ref(hoyIso)
+const fechaHasta = ref(hoyIso)
+const tipoPagoFiltro = ref<'todos' | 'efectivo' | 'transferencia' | 'tarjeta' | 'credito'>('todos')
 
-const resumenOrdenado = computed(() => {
+const resumenFiltrado = computed(() => {
   const termino = criterioBusqueda.value.trim().toLowerCase()
-  const filtrados = [...resumenes.value].filter((item) => {
+  const desde = fechaDesde.value ? new Date(`${fechaDesde.value}T00:00:00`) : null
+  const hasta = fechaHasta.value ? new Date(`${fechaHasta.value}T23:59:59`) : null
+  return [...resumenes.value].filter((item) => {
     if (item.estado !== true) return false
+    const subtotalNum = Number(item.subtotal ?? 0)
+    if (!Number.isFinite(subtotalNum) || subtotalNum <= 0) return false
+    const fechaItem = new Date(String(item.fecha ?? ''))
+    if (desde && !Number.isNaN(fechaItem.getTime()) && fechaItem < desde) return false
+    if (hasta && !Number.isNaN(fechaItem.getTime()) && fechaItem > hasta) return false
+    const tipo = (item.tipo_pago ?? '').toString().toLowerCase()
+    const esCredito = item.es_credito
+    if (tipoPagoFiltro.value !== 'todos') {
+      if (tipoPagoFiltro.value === 'credito') {
+        if (!esCredito && !tipo.includes('credito')) return false
+      } else {
+        if (!tipo.includes(tipoPagoFiltro.value)) return false
+      }
+    }
     if (!termino) return true
     const factura = String(item.numero_factura ?? '').toLowerCase()
     const cliente = String(item.cliente_nombre ?? '').toLowerCase()
     return factura.includes(termino) || cliente.includes(termino)
   })
-  return filtrados.sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0))
+})
+
+const resumenOrdenado = computed(() => {
+  return resumenFiltrado.value.sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0))
 })
 
 const resumenPagos = computed(() => {
@@ -385,7 +408,7 @@ const resumenPagos = computed(() => {
     transferencia: 0,
     credito: 0
   }
-  resumenes.value.forEach((item) => {
+  resumenFiltrado.value.forEach((item) => {
     const total = Number(item.total ?? 0)
     if (!Number.isFinite(total)) return
     if (item.es_credito && !item.tipo_pago) {
@@ -405,7 +428,7 @@ const resumenPagos = computed(() => {
 })
 
 const totalVentas = computed(() =>
-  resumenes.value.reduce((total, item) => total + Number(item.total ?? 0), 0)
+  resumenFiltrado.value.reduce((total, item) => total + Number(item.total ?? 0), 0)
 )
 
 const cargarResumen = async () => {
@@ -503,6 +526,7 @@ const actualizarEstadoVenta = async (item: ResumenVenta) => {
     if (index >= 0) {
       resumenes.value[index].estado = estadoNuevo
     }
+    void cargarResumen()
   } catch (err) {
     const detalle = err instanceof Error ? err.message : String(err)
     error.value = `No fue posible actualizar el estado. ${detalle}`
@@ -663,6 +687,7 @@ const eliminarDetalle = async (detalle: DetalleVenta) => {
         resumenes.value[index].estado = false
       }
     }
+    void cargarResumen()
   } catch (err) {
     const detalleError = err instanceof Error ? err.message : String(err)
     errorDetalle.value = `No fue posible eliminar el detalle. ${detalleError}`
@@ -684,6 +709,26 @@ onMounted(() => {
           placeholder="Buscar por factura o cliente"
           class="resumen__buscador"
         />
+        <div class="resumen__filtros">
+          <label>
+            Desde
+            <input v-model="fechaDesde" type="date" />
+          </label>
+          <label>
+            Hasta
+            <input v-model="fechaHasta" type="date" />
+          </label>
+          <label>
+            Tipo de pago
+            <select v-model="tipoPagoFiltro">
+              <option value="todos">Todos</option>
+              <option value="efectivo">Efectivo</option>
+              <option value="transferencia">Transferencia</option>
+              <option value="tarjeta">Tarjeta</option>
+              <option value="credito">Crédito</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="resumen__acciones">
         <SessionRoleChip />
@@ -742,12 +787,12 @@ onMounted(() => {
             <th>Fecha</th>
             <th>Factura</th>
             <th>Cliente</th>
-            <th>Subtotal</th>
-            <th>Descuento</th>
-            <th>Total</th>
-            <th>Tipo pago</th>
+            <th class="col-num">Subtotal</th>
+            <th class="col-num">Descuento</th>
+            <th class="col-num">Total</th>
+            <th class="col-centro">Tipo pago</th>
             <th>Usuario</th>
-            <th>Estado</th>
+            <th class="col-centro">Estado</th>
             <th class="th-accion"></th>
           </tr>
         </thead>
@@ -866,6 +911,36 @@ onMounted(() => {
   margin-top: 0.5rem;
 }
 
+.resumen__filtros {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.45rem;
+}
+
+.resumen__filtros label {
+  display: grid;
+  gap: 0.25rem;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+}
+
+.resumen__filtros input {
+  border-radius: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.55rem 0.65rem;
+  background: rgba(12, 13, 16, 0.85);
+  color: #e2e8f0;
+}
+
+.resumen__filtros select {
+  border-radius: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.55rem 0.65rem;
+  background: rgba(12, 13, 16, 0.85);
+  color: #e2e8f0;
+}
+
 .resumen__tarjetas {
   display: grid;
   gap: 1rem;
@@ -963,6 +1038,7 @@ onMounted(() => {
   padding: 0.6rem 0.75rem;
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   background: rgba(13, 15, 20, 0.9);
+  text-align: left;
 }
 
 .tabla__grid tbody tr:last-child td {
@@ -970,12 +1046,12 @@ onMounted(() => {
 }
 
 .col-num {
-  text-align: right;
+  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 
 .col-centro {
-  text-align: center;
+  text-align: left;
 }
 
 .col-accion {

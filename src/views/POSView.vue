@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import jsPDF from 'jspdf'
 import { crearMovimientoFinanciero } from '../services/movimientosFinancieros'
 import { ENDPOINTS } from '../config/endpoints'
@@ -28,6 +28,8 @@ type ItemCarrito = {
   cantidad: number
   descuentoPct: number
   descuentoMonto: number
+  totalBackend?: number
+  cantidadBackend?: number
 }
 
 type Cliente = {
@@ -118,6 +120,8 @@ const pagoRecibidoModalInput = ref('')
 const parsePesos = (valor: string) => Number(String(valor).replace(/[^\d]/g, '')) || 0
 const pagoRecibidoModalValor = computed(() => parsePesos(pagoRecibidoModalInput.value))
 const cambioModal = computed(() => Math.max(pagoRecibidoModalValor.value - resumenCobro.value.total, 0))
+const pagoRecibidoTexto = computed(() => (pagoRecibido.value ? formatCurrency(pagoRecibido.value) : ''))
+const pagoRecibidoModalRef = ref<HTMLInputElement | null>(null)
 const normalizarCantidadBolsaValor = (valor: number) => {
   if (!Number.isFinite(valor)) return 0
   return Math.max(0, Math.trunc(valor))
@@ -135,6 +139,7 @@ const onPagoRecibidoModalInput = (event: Event) => {
 const numeroFacturaResumen = ref('')
 const reciboItems = ref<ItemCarrito[]>([])
 const descuentoItem = ref<ItemCarrito | null>(null)
+const cargandoPendiente = ref(false)
 const tamañoPanelProductos = ref(62)
 const tamañoPanelDetalle = computed(() => Math.max(100 - tamañoPanelProductos.value, 20))
 const arrastrandoSplitter = ref(false)
@@ -194,19 +199,91 @@ const extraerCantidadBolsasDesdeDetalles = (detalles: unknown) => {
 
 const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
   if (!Array.isArray(detalles)) return []
+  const parseNum = (valor: unknown) => {
+    if (valor === null || valor === undefined) return NaN
+    if (typeof valor === 'number') return valor
+    if (typeof valor === 'string') return Number(valor.replace(/,/g, ''))
+    return NaN
+  }
   return detalles
     .map((item) => {
       if (!item || typeof item !== 'object') return null
       const detalle = item as Record<string, unknown>
-      const id = Number(detalle.producto_id ?? detalle.productoId ?? detalle.id ?? 0)
+      const productoObj = (detalle.producto as Record<string, unknown>) ?? undefined
+      const id = Number(
+        detalle.producto_id ??
+          detalle.productoId ??
+          productoObj?.id ??
+          productoObj?.producto_id ??
+          detalle.id ??
+          detalle.detalle_id ??
+          0
+      )
       if (!id) return null
       if (id === BOLSA_PRODUCTO_ID) return null
-      const nombreBackend = detalle.producto_nombre ?? detalle.nombre
+      const nombreBackend = detalle.producto_nombre ?? detalle.nombre ?? productoObj?.nombre
       const productoLocal = productos.value.find((producto) => producto.backendId === id || producto.id === id)
       const nombre = String(nombreBackend ?? productoLocal?.nombre ?? `Producto ${id}`)
-      const precio = Number(detalle.precio_unitario ?? detalle.precio ?? 0)
-      const cantidad = Number(detalle.cantidad ?? 1)
-      const codigoBarras = productoLocal?.codigoBarras
+      const subtotalBrutoRaw = parseNum(
+        detalle.subtotal ?? detalle.sub_total ?? detalle.subtotal_bruto ?? detalle.subtotalBruto
+      )
+      const descuentoRaw = parseNum(
+        detalle.descuento ??
+          detalle.descuento_total ??
+          detalle.descuentoTotal ??
+          detalle.descuento_linea ??
+          detalle.descuentoLinea
+      )
+      let totalRaw = parseNum(detalle.total_linea ?? detalle.totalLinea ?? detalle.total)
+      if (!Number.isFinite(totalRaw) && Number.isFinite(subtotalBrutoRaw) && Number.isFinite(descuentoRaw)) {
+        totalRaw = subtotalBrutoRaw - descuentoRaw
+      }
+      const precioOriginal = parseNum(detalle.precio_unitario ?? detalle.precio ?? productoObj?.precio)
+      let precio = Number.isFinite(precioOriginal) ? precioOriginal : 0
+      const cantidad = Number(
+        detalle.cantidad ??
+          detalle.cant ??
+          detalle.cantidad_vendida ??
+          detalle.quantity ??
+          detalle.qty ??
+          1
+      )
+      const codigoBarras = productoLocal?.codigoBarras ?? (productoObj?.codigo_barras as string | undefined)
+      const descuentoPct = Number(
+        detalle.descuento_pct ??
+          detalle.descuentoPct ??
+          detalle.descuento_porcentaje ??
+          detalle.descuentoPorcentaje ??
+          0
+      )
+      const descuentoMonto = Number(
+        detalle.descuento_monto ??
+          detalle.descuentoMonto ??
+          detalle.descuento ??
+          detalle.descuento_linea ??
+          0
+      )
+      const tieneSubtotal = Number.isFinite(subtotalBrutoRaw) && subtotalBrutoRaw > 0
+      const tieneTotal = Number.isFinite(totalRaw) && totalRaw > 0
+      if (tieneSubtotal && Number.isFinite(cantidad) && cantidad > 0) {
+        precio = subtotalBrutoRaw / cantidad
+      } else if (tieneTotal && Number.isFinite(cantidad) && cantidad > 0) {
+        precio = totalRaw / cantidad
+      }
+      let descuentoMontoFinal = descuentoMonto
+      let descuentoPctFinal = descuentoPct
+      if (Number.isFinite(descuentoRaw) && descuentoRaw > 0) {
+        const cantBase = Number.isFinite(cantidad) && cantidad > 0 ? cantidad : 1
+        descuentoMontoFinal = descuentoRaw / cantBase
+        descuentoPctFinal = 0
+      } else if (tieneSubtotal && tieneTotal) {
+        const diff = subtotalBrutoRaw - totalRaw
+        if (diff > 0) {
+          const cantBase = Number.isFinite(cantidad) && cantidad > 0 ? cantidad : 1
+          descuentoMontoFinal = diff / cantBase
+          descuentoPctFinal = 0
+        }
+      }
       return {
         id,
         backendId: id,
@@ -214,14 +291,17 @@ const mapearItemsPendientes = (detalles: unknown): ItemCarrito[] => {
         codigoBarras: formatearCodigosBarras(codigoBarras),
         precio,
         cantidad,
-        descuentoPct: Number(detalle.descuento_pct ?? detalle.descuentoPct ?? 0),
-        descuentoMonto: Number(detalle.descuento_monto ?? detalle.descuentoMonto ?? 0)
+        descuentoPct: descuentoPctFinal,
+        descuentoMonto: descuentoMontoFinal,
+        totalBackend: tieneTotal ? totalRaw : undefined,
+        cantidadBackend: Number.isFinite(cantidad) ? cantidad : undefined
       }
     })
     .filter(Boolean) as ItemCarrito[]
 }
 
 const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
+  cargandoPendiente.value = true
   const ventaIdRaw = Number(venta.venta_id ?? venta.id ?? NaN)
   ventaId.value = Number.isFinite(ventaIdRaw) ? ventaIdRaw : Date.now()
   ventaPendienteId.value = Number.isFinite(ventaIdRaw) ? ventaIdRaw : null
@@ -242,12 +322,22 @@ const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
   cantidadBolsas.value = normalizarCantidadBolsaValor(extraerCantidadBolsasDesdeDetalles(detalles))
   carrito.value = mapearItemsPendientes(detalles)
   ultimaAccion.value = `Venta #${ventaId.value} cargada`
+  cargandoPendiente.value = false
 }
 
-const cargarPendienteEvento = (event: Event) => {
+const cargarPendienteEvento = async (event: Event) => {
   const detalle = (event as CustomEvent).detail as { venta?: Record<string, unknown> } | undefined
   if (!detalle?.venta) return
+  cargandoPendiente.value = true
+  limpiarCarrito()
+  clienteId.value = null
+  clienteQuery.value = ''
+  cantidadBolsas.value = 0
+  notaRapida.value = ''
+  estadoVenta.value = true
+  await cargarProductos()
   cargarVentaPendienteDesdeApi(detalle.venta)
+  cargandoPendiente.value = false
 }
 
 const manejarAtajos = (event: KeyboardEvent) => {
@@ -275,6 +365,9 @@ const manejarAtajos = (event: KeyboardEvent) => {
   } else if (event.key === 'F9') {
     event.preventDefault()
     guardarVentaPendiente()
+  } else if (event.key === 'F8') {
+    event.preventDefault()
+    mostrarTicketModal.value = true
   } else if (event.key === 'Escape') {
     if (mostrarTicketModal.value) {
       event.preventDefault()
@@ -289,6 +382,19 @@ const manejarClickFueraBuscador = (event: MouseEvent) => {
   if (!buscadorRef.value.contains(target)) {
     consulta.value = ''
   }
+}
+const focusBuscador = () => {
+  const input = buscadorRef.value?.querySelector('input') as HTMLInputElement | null
+  if (input) {
+    input.focus()
+    input.select()
+  }
+}
+const onPagoRecibidoInput = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const parsed = parsePesos(input.value)
+  pagoRecibido.value = parsed
+  input.value = parsed ? formatCurrency(parsed) : ''
 }
 const focusUltimaCantidad = () => {
   const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('.linea__cantidad'))
@@ -560,7 +666,10 @@ const calcularLinea = (item: ItemCarrito) => {
   const descuentoPorcentaje = base * (descuentoPct / 100)
   const descuentoMontoTotal = Number(item.descuentoMonto) * Number(item.cantidad)
   const descuentoMonto = normalizarDescuentoMonto(descuentoMontoTotal, base - descuentoPorcentaje)
-  const total = Math.max(base - descuentoPorcentaje - descuentoMonto, 0)
+  let total = Math.max(base - descuentoPorcentaje - descuentoMonto, 0)
+  if (Number.isFinite(item.totalBackend) && item.cantidadBackend === item.cantidad) {
+    total = Number(item.totalBackend)
+  }
   return { base, descuentoPct, descuentoPorcentaje, descuentoMonto, total }
 }
 
@@ -620,6 +729,7 @@ const descuentoPorDefectoCliente = () => {
 watch(
   () => clienteId.value,
   () => {
+    if (cargandoPendiente.value) return
     const descuentoCliente = descuentoPorDefectoCliente()
     carrito.value = carrito.value.map((item) => ({
       ...item,
@@ -632,6 +742,17 @@ watch(
     } else {
       clienteQuery.value = ''
     }
+  }
+)
+
+watch(
+  () => mostrarResumenCobro.value,
+  (abierto) => {
+    if (!abierto) return
+    nextTick(() => {
+      pagoRecibidoModalRef.value?.focus()
+      pagoRecibidoModalRef.value?.select()
+    })
   }
 )
 
@@ -653,12 +774,13 @@ watch(
   }
 )
 
-const resumenDescuentoLinea = (item: ItemCarrito) => {
-  const { descuentoPct, descuentoMonto } = calcularLinea(item)
+const textoDescuentoLinea = (item: ItemCarrito) => {
+  const linea = calcularLinea(item)
+  const ahorro = Math.max(linea.base - linea.total, 0)
   const piezas: string[] = []
-  if (descuentoPct > 0) piezas.push(`-${descuentoPct}%`)
-  if (descuentoMonto > 0) piezas.push(`-${formatCurrency(descuentoMonto)}`)
-  return piezas.join(' · ')
+  if (linea.descuentoPct > 0) piezas.push(`-${linea.descuentoPct}%`)
+  if (ahorro > 0) piezas.push(`-${formatCurrency(ahorro)}`)
+  return piezas.length ? piezas.join(' · ') : 'Sin descuento'
 }
 
 const agregarAlCarrito = (producto: Producto) => {
@@ -684,6 +806,7 @@ const agregarAlCarrito = (producto: Producto) => {
     })
   }
   ultimaAccion.value = `${producto.nombre} añadido`
+  focusBuscador()
 }
 
 const actualizarCantidad = (id: number, delta: number) => {
@@ -691,6 +814,8 @@ const actualizarCantidad = (id: number, delta: number) => {
   if (!item) return
   if (delta !== 0) {
     item.cantidad += delta
+    item.totalBackend = undefined
+    item.cantidadBackend = undefined
   }
   if (!Number.isFinite(item.cantidad)) {
     item.cantidad = 1
@@ -717,12 +842,18 @@ const limpiarCarrito = () => {
 
 const construirDetallesVenta = () => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
-  const detalles = carrito.value.map((item) => ({
-    producto_id: item.backendId ?? item.id,
-    cantidad: item.cantidad,
-    precio_unitario: redondear2(item.precio),
-    subtotal: redondear2(calcularLinea(item).base)
-  }))
+  const detalles = carrito.value.map((item) => {
+    const linea = calcularLinea(item)
+    return {
+      producto_id: item.backendId ?? item.id,
+      cantidad: item.cantidad,
+      precio_unitario: redondear2(item.precio),
+      subtotal: redondear2(linea.base),
+      descuento: redondear2(linea.descuentoPorcentaje + linea.descuentoMonto),
+      descuento_monto: redondear2(linea.descuentoMonto),
+      descuento_pct: redondear2(linea.descuentoPct)
+    }
+  })
 
   const cantidadBolsa = normalizarCantidadBolsaValor(cantidadBolsas.value)
   if (cantidadBolsa > 0) {
@@ -730,7 +861,10 @@ const construirDetallesVenta = () => {
       producto_id: BOLSA_PRODUCTO_ID,
       cantidad: cantidadBolsa,
       precio_unitario: redondear2(PRECIO_BOLSA),
-      subtotal: redondear2(PRECIO_BOLSA * cantidadBolsa)
+      subtotal: redondear2(PRECIO_BOLSA * cantidadBolsa),
+      descuento: 0,
+      descuento_monto: 0,
+      descuento_pct: 0
     })
   }
 
@@ -919,6 +1053,9 @@ const cerrarVenta = async () => {
     void abrirCajonMonedero()
     limpiarCarrito()
     notaRapida.value = ''
+    clienteId.value = null
+    clienteQuery.value = ''
+    clienteDropdownOpen.value = false
     ventaId.value = Date.now()
     fechaVenta.value = nowUTCMinus5Iso()
     estadoVenta.value = true
@@ -929,6 +1066,10 @@ const cerrarVenta = async () => {
     }
     resumenCobro.value = { ...snapshot, numeroFactura: numeroFacturaResumen.value }
     pagoRecibidoModalInput.value = formatCurrency(snapshot.pagoRecibido || snapshot.total)
+    nextTick(() => {
+      pagoRecibidoModalRef.value?.focus()
+      pagoRecibidoModalRef.value?.select()
+    })
     reciboItems.value = snapshotItems
     mostrarResumenCobro.value = true
   } catch (error) {
@@ -1746,25 +1887,29 @@ const imprimirTicketResumen = async () => {
               </div>
               <div class="linea__acciones">
                 <button type="button" @click.stop="actualizarCantidad(item.id, -1)">-</button>
-                <input
-                  v-model.number="item.cantidad"
-                  type="number"
-                  min="1"
-                  step="1"
-                  class="linea__cantidad"
-                  @change="actualizarCantidad(item.id, 0)"
-                />
+    <input
+      v-model.number="item.cantidad"
+      type="number"
+      min="1"
+      step="1"
+      class="linea__cantidad"
+      @change="actualizarCantidad(item.id, 0)"
+      @input="actualizarCantidad(item.id, 0)"
+    />
                 <button type="button" @click.stop="actualizarCantidad(item.id, 1)">+</button>
                 <button type="button" class="linea__eliminar" @click.stop="eliminarItem(item.id)">x</button>
               </div>
               <div class="linea__precio-col">{{ formatCurrency(item.precio) }}</div>
               <div class="linea__totales">
                 <strong>{{ formatCurrency(totalLinea(item)) }}</strong>
-                <small v-if="item.descuentoPct || item.descuentoMonto" class="linea__precio-original">
+                <small class="linea__precio-original">
                   Antes: {{ formatCurrency(calcularLinea(item).base) }}
                 </small>
-                <small v-if="item.descuentoPct || item.descuentoMonto">{{ resumenDescuentoLinea(item) }}</small>
-                <small v-else class="linea__descuento-vacio">Sin descuento</small>
+                <small
+                  :class="textoDescuentoLinea(item) === 'Sin descuento' ? 'linea__descuento-vacio' : ''"
+                >
+                  {{ textoDescuentoLinea(item) }}
+                </small>
               </div>
             </div>
           </li>
@@ -1872,7 +2017,14 @@ const imprimirTicketResumen = async () => {
         <div class="controles">
           <label>
             Pago recibido
-            <input v-model.number="pagoRecibido" type="number" min="0" step="100" />
+            <input
+              class="pago-recibido-input"
+              :value="pagoRecibidoTexto"
+              type="text"
+              inputmode="numeric"
+              placeholder="$ 0"
+              @input="onPagoRecibidoInput"
+            />
           </label>
           <label>
             Nota rápida
@@ -1919,11 +2071,27 @@ const imprimirTicketResumen = async () => {
 
         <div class="acciones-finales">
           <span class="estado">{{ ultimaAccion }}</span>
-          <div class="acciones-finales__botones">
-            <button type="button" class="boton primario" @click="guardarVentaPendiente">Guardar venta F9</button>
-            <button type="button" class="boton primario" @click="cerrarVenta">Cobrar F10</button>
-          </div>
+        <div class="acciones-finales__botones">
+          <button
+            type="button"
+            class="boton secundaria"
+            :disabled="carrito.length === 0 && cantidadBolsas === 0"
+            @click="limpiarCarrito"
+          >
+            Vaciar
+          </button>
+          <button
+            type="button"
+            class="boton secundaria"
+            :disabled="carrito.length === 0 && cantidadBolsas === 0"
+            @click="mostrarTicketModal = true"
+          >
+            Ticket F8
+          </button>
+          <button type="button" class="boton primario" @click="guardarVentaPendiente">Guardar venta F9</button>
+          <button type="button" class="boton primario" @click="cerrarVenta">Cobrar F10</button>
         </div>
+      </div>
       </section>
     </section>
 
@@ -2066,6 +2234,7 @@ const imprimirTicketResumen = async () => {
         <div class="cobro-input">
           <label>Pago recibido</label>
           <input
+            ref="pagoRecibidoModalRef"
             :value="pagoRecibidoModalInput"
             type="text"
             inputmode="numeric"
@@ -2744,6 +2913,15 @@ const imprimirTicketResumen = async () => {
   color: #e2e8f0;
 }
 
+.controles .pago-recibido-input {
+  font-size: 1.35rem;
+  font-weight: 700;
+  padding: 0.8rem 0.9rem;
+  letter-spacing: 0.02em;
+  background: rgba(17, 24, 39, 0.95);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
 .bolsa-cantidad {
   display: grid;
   gap: 0.25rem;
@@ -2982,13 +3160,14 @@ const imprimirTicketResumen = async () => {
 }
 
 .cobro-input input {
-  font-size: 1.4rem;
-  font-weight: 700;
-  padding: 0.75rem 0.9rem;
-  border-radius: 0.9rem;
-  border: 1px solid #4a4a4a;
-  background: #1f1f1f;
+  font-size: 1.6rem;
+  font-weight: 800;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid #38bdf8;
+  background: #0f172a;
   color: #e5e7eb;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
 }
 
 .cobro-input__cambio {

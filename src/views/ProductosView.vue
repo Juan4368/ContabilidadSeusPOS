@@ -323,8 +323,10 @@ const normalizarProducto = (item: unknown, index: number, base?: Producto): Prod
   }
 }
 
+const productoUrl = (id: number) => `${API_PRODUCTOS.replace(/\/$/, '')}/${id}`
+
 const requestProducto = async (method: string, id: number, payload: Record<string, unknown>) => {
-  const respuesta = await fetch(`${API_PRODUCTOS}${id}/`, {
+  const respuesta = await fetch(productoUrl(id), {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -350,6 +352,7 @@ const actualizarProductoApi = async (
   } catch (error) {
     const status = (error as Error & { status?: number }).status
     if (fallbackPayload && (status === 404 || status === 405)) {
+      // Algunos balanceadores devuelven 405 cuando falta la barra final: reintenta con PUT y payload completo
       return await requestProducto('PUT', id, fallbackPayload)
     }
     throw error
@@ -642,7 +645,10 @@ const guardarEdicionFila = async () => {
     filaEdicionId.value = null
   } catch (error) {
     console.error('Error al actualizar producto', error)
-    errorForm.value = 'No fue posible actualizar el producto.'
+    const detalle = (error as Error)?.message ?? ''
+    errorForm.value = detalle
+      ? `No fue posible actualizar el producto: ${detalle}`
+      : 'No fue posible actualizar el producto.'
   }
 }
 
