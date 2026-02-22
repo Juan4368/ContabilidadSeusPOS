@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import SessionRoleChip from '../components/SessionRoleChip.vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ENDPOINTS } from '../config/endpoints'
 import { nowUTCMinus5Iso } from '../utils/time'
 
@@ -50,6 +50,8 @@ const productos = reactive<Producto[]>([
 
 const API_PRODUCTOS = ENDPOINTS.PRODUCTOS
 const API_CATEGORIAS = ENDPOINTS.CATEGORIAS_POS
+const PRODUCTOS_CACHE_KEY = 'productos_catalogo_cache_v1'
+const MONEDA_COP_PASO = 50
 
 const form = reactive({
   codigoBarras: '',
@@ -68,6 +70,9 @@ const filtroCategoria = ref('Todas')
 const filtroEstado = ref<'todos' | 'activo' | 'inactivo'>('todos')
 const errorForm = ref('')
 const mostrarFormulario = ref(false)
+const mostrarFormularioEdicion = ref(false)
+const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+const productoEdicionId = ref<number | null>(null)
 const filaEdicionId = ref<number | null>(null)
 const filaEdicion = reactive({
   codigoBarras: '',
@@ -80,6 +85,34 @@ const filaEdicion = reactive({
   estado: 'activo' as 'activo' | 'inactivo'
 })
 
+const redondearPrecioMonedaCop = (valor: number) => {
+  const numero = Number(valor)
+  if (!Number.isFinite(numero) || numero <= 0) return 0
+  return Math.ceil(numero / MONEDA_COP_PASO) * MONEDA_COP_PASO
+}
+
+const parseNumeroFlexible = (valor: unknown): number => {
+  if (typeof valor === 'number') return Number.isFinite(valor) ? valor : NaN
+  if (typeof valor !== 'string') return NaN
+  const limpio = valor.trim().replace(/[^\d,.\-]/g, '')
+  if (!limpio) return NaN
+
+  const tieneComa = limpio.includes(',')
+  const tienePunto = limpio.includes('.')
+
+  if (tieneComa && tienePunto) {
+    const ultimaComa = limpio.lastIndexOf(',')
+    const ultimoPunto = limpio.lastIndexOf('.')
+    if (ultimaComa > ultimoPunto) {
+      return Number(limpio.replace(/\./g, '').replace(',', '.'))
+    }
+    return Number(limpio.replace(/,/g, ''))
+  }
+
+  if (tieneComa) return Number(limpio.replace(',', '.'))
+  return Number(limpio)
+}
+
 const precioVentaCalculado = computed({
   get: () => {
     const costo = Number(form.costo || 0)
@@ -87,10 +120,10 @@ const precioVentaCalculado = computed({
     const ivaPct = Number(form.iva || 0)
     const precio = costo * (1 + margenPct / 100)
     const precioFinal = precio * (1 + ivaPct / 100)
-    return Math.max(Math.round(precioFinal), 0)
+    return redondearPrecioMonedaCop(precioFinal)
   },
   set: (valor: number) => {
-    actualizarMargenDesdePrecio(Math.round(valor))
+    actualizarMargenDesdePrecio(redondearPrecioMonedaCop(valor))
   }
 })
 
@@ -101,10 +134,16 @@ const precioVentaEdicion = computed({
     const ivaPct = Number(filaEdicion.iva || 0)
     const precio = costo * (1 + margenPct / 100)
     const precioFinal = precio * (1 + ivaPct / 100)
-    return Math.max(Math.round(precioFinal), 0)
+    const calculado = redondearPrecioMonedaCop(precioFinal)
+    if (calculado > 0) return calculado
+    if (productoEdicionId.value !== null) {
+      const actual = productos.find((item) => item.id === productoEdicionId.value)
+      if (actual?.precioVenta) return redondearPrecioMonedaCop(Number(actual.precioVenta))
+    }
+    return 0
   },
   set: (valor: number) => {
-    actualizarMargenEdicionDesdePrecio(Math.round(valor))
+    actualizarMargenEdicionDesdePrecio(redondearPrecioMonedaCop(valor))
   }
 })
 
@@ -132,18 +171,55 @@ const actualizarMargenEdicionDesdePrecio = (precioVenta: number) => {
   filaEdicion.margen = Number(Math.max(margen, 0).toFixed(2))
 }
 
-const prepararBorrado = (event: Event) => {
-  const input = event.target as HTMLInputElement
-  input.dataset.clearOnType = 'true'
-  input.select()
+const prepararBorrado = () => {}
+
+const borrarAlEscribir = () => {}
+
+const manejarTeclaGlobal = (event: KeyboardEvent) => {
+  if (event.key !== 'Escape') return
+  if (mostrarFormularioEdicion.value) {
+    cancelarEdicionFila()
+    return
+  }
+  if (mostrarFormulario.value) {
+    mostrarFormulario.value = false
+  }
 }
 
-const borrarAlEscribir = (event: KeyboardEvent) => {
-  const input = event.target as HTMLInputElement
-  if (input.dataset.clearOnType !== 'true') return
-  if (event.key.length === 1 || event.key === 'Backspace' || event.key === 'Delete') {
-    input.value = ''
-    input.dataset.clearOnType = 'false'
+const numeroSeguro = (valor: unknown, fallback: number) => {
+  const numero = parseNumeroFlexible(valor)
+  if (Number.isFinite(numero)) return numero
+  const numeroFallback = parseNumeroFlexible(fallback)
+  return Number.isFinite(numeroFallback) ? numeroFallback : 0
+}
+
+const porcentajeEditableSeguro = (valor: unknown, fallback = 0) => {
+  const base = numeroSeguro(valor, fallback)
+  if (base <= 1 && base >= 0) return Number((base * 100).toFixed(2))
+  return Number(base.toFixed(2))
+}
+
+const actualizarEstadoConexion = () => {
+  if (typeof navigator === 'undefined') return
+  isOnline.value = navigator.onLine
+}
+
+const leerProductosCache = (): Producto[] => {
+  try {
+    const raw = localStorage.getItem(PRODUCTOS_CACHE_KEY)
+    if (!raw) return []
+    const data = JSON.parse(raw) as Producto[]
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
+}
+
+const guardarProductosCache = (lista: Producto[] = productos) => {
+  try {
+    localStorage.setItem(PRODUCTOS_CACHE_KEY, JSON.stringify(lista))
+  } catch {
+    // Ignora errores de almacenamiento
   }
 }
 
@@ -201,30 +277,31 @@ const eliminarProducto = async (producto: Producto) => {
     const index = productos.findIndex((item) => item.id === producto.id)
     if (index >= 0) {
       productos.splice(index, 1)
+      guardarProductosCache()
     }
   } catch (error) {
     console.error('Error al eliminar producto', error)
     errorForm.value = 'No fue posible eliminar el producto.'
   }
 }
-const normalizarProducto = (item: unknown, index: number): Producto | null => {
+const normalizarProducto = (item: unknown, index: number, base?: Producto): Producto | null => {
   if (!item || typeof item !== 'object') return null
   const producto = item as Record<string, unknown>
-  const id = Number(producto.producto_id ?? producto.id ?? producto.pk ?? index + 1)
-  const codigoBarras = String(producto.codigo_barras ?? producto.codigoBarras ?? '')
-  const nombre = String(producto.nombre ?? producto.name ?? 'Producto')
-  const categoriaId = producto.categoria_id ?? producto.categoriaId ?? null
+  const id = Number(producto.producto_id ?? producto.id ?? producto.pk ?? base?.id ?? index + 1)
+  const codigoBarras = String(producto.codigo_barras ?? producto.codigoBarras ?? base?.codigoBarras ?? '')
+  const nombre = String(producto.nombre ?? producto.name ?? base?.nombre ?? 'Producto')
+  const categoriaId = producto.categoria_id ?? producto.categoriaId ?? base?.categoriaId ?? null
   const categoriaIdNumero = categoriaId === null ? null : Number(categoriaId)
-  const descripcion = String(producto.descripcion ?? '')
-  const costo = Number(producto.costo ?? 0)
-        const margen = Number(producto.margen ?? 0)
-        const iva = Number(producto.iva ?? 0)
-  const precioVenta = Number(producto.precio_venta ?? producto.precioVenta ?? producto.precio ?? 0)
-  const creadoPorId = producto.creado_por_id ?? producto.creadoPorId ?? null
-  const actualizadoPorId = producto.actualizado_por_id ?? producto.actualizadoPorId ?? null
-  const fechaCreacion = String(producto.fecha_creacion ?? producto.fechaCreacion ?? '')
-  const fechaActualizacion = String(producto.fecha_actualizacion ?? producto.fechaActualizacion ?? '')
-  const estadoRaw = producto.estado
+  const descripcion = String(producto.descripcion ?? base?.descripcion ?? '')
+  const costo = Number(producto.costo ?? base?.costo ?? 0)
+  const margen = Number(producto.margen ?? base?.margen ?? 0)
+  const iva = Number(producto.iva ?? base?.iva ?? 0)
+  const precioVenta = Number(producto.precio_venta ?? producto.precioVenta ?? producto.precio ?? base?.precioVenta ?? 0)
+  const creadoPorId = producto.creado_por_id ?? producto.creadoPorId ?? base?.creadoPorId ?? null
+  const actualizadoPorId = producto.actualizado_por_id ?? producto.actualizadoPorId ?? base?.actualizadoPorId ?? null
+  const fechaCreacion = String(producto.fecha_creacion ?? producto.fechaCreacion ?? base?.fechaCreacion ?? '')
+  const fechaActualizacion = String(producto.fecha_actualizacion ?? producto.fechaActualizacion ?? base?.fechaActualizacion ?? '')
+  const estadoRaw = producto.estado ?? base?.estado
   const estado =
     estadoRaw === false || estadoRaw === 'inactivo' ? 'inactivo' : estadoRaw === 'activo' ? 'activo' : 'activo'
 
@@ -279,14 +356,30 @@ const actualizarProductoApi = async (
   }
 }
 
+const extraerLista = (data: unknown): unknown[] => {
+  if (Array.isArray(data)) return data
+  if (data && typeof data === 'object') {
+    const dataObj = data as Record<string, unknown>
+    if (Array.isArray(dataObj.results)) return dataObj.results as unknown[]
+    if (Array.isArray(dataObj.data)) return dataObj.data as unknown[]
+  }
+  return []
+}
+
 const cargarProductos = async () => {
+  const cache = leerProductosCache()
+  if (cache.length) {
+    productos.splice(0, productos.length, ...cache)
+  }
+
   try {
+    actualizarEstadoConexion()
     const respuesta = await fetch(API_PRODUCTOS)
     if (!respuesta.ok) {
       throw new Error(`Error ${respuesta.status}`)
     }
     const data = await respuesta.json()
-    const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
+    const lista = extraerLista(data)
 
     const normalizados = lista
       .map((item: unknown, index: number) => {
@@ -298,9 +391,14 @@ const cargarProductos = async () => {
 
     if (normalizados.length) {
       productos.splice(0, productos.length, ...normalizados)
+      guardarProductosCache(normalizados)
     }
   } catch (error) {
+    actualizarEstadoConexion()
     console.error('No se pudieron cargar productos', error)
+    if (!cache.length) {
+      errorForm.value = 'Sin conexion. No hay cache de productos disponible.'
+    }
   }
 }
 
@@ -331,8 +429,18 @@ const cargarCategorias = async () => {
 }
 
 onMounted(() => {
+  window.addEventListener('online', actualizarEstadoConexion)
+  window.addEventListener('offline', actualizarEstadoConexion)
+  window.addEventListener('keydown', manejarTeclaGlobal)
+  actualizarEstadoConexion()
   void cargarCategorias()
   void cargarProductos()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('online', actualizarEstadoConexion)
+  window.removeEventListener('offline', actualizarEstadoConexion)
+  window.removeEventListener('keydown', manejarTeclaGlobal)
 })
 
 const categoriasActivas = computed(() => categorias.filter((categoria) => categoria.estado === 'activo'))
@@ -395,12 +503,13 @@ const crearProducto = async () => {
   const payload = {
     codigo_barras: codigoBarras,
     nombre,
+    name: nombre,
     categoria_id: form.categoriaId,
     descripcion: form.descripcion.trim(),
     costo: Number(form.costo || 0),
     margen: Number(form.margen || 0) / 100,
     iva: Number(form.iva || 0) / 100,
-    precio_venta: Number(precioVentaCalculado.value.toFixed(0)),
+    precio_venta: redondearPrecioMonedaCop(precioVentaCalculado.value),
     creado_por_id: form.creadoPorId ?? null,
     actualizado_por_id: form.creadoPorId ?? null,
     estado: form.estado === 'activo'
@@ -422,6 +531,7 @@ const crearProducto = async () => {
     const normalizado = normalizarProducto(fuente, productos.length)
     if (normalizado) {
       productos.unshift(normalizado)
+      guardarProductosCache()
     }
     resetForm()
     mostrarFormulario.value = false
@@ -432,22 +542,32 @@ const crearProducto = async () => {
 }
 
 const iniciarEdicionFila = (producto: Producto) => {
-  filaEdicionId.value = producto.id
+  productoEdicionId.value = producto.id
+  filaEdicionId.value = null
   filaEdicion.codigoBarras = producto.codigoBarras
   filaEdicion.nombre = producto.nombre
   filaEdicion.categoriaId = producto.categoriaId
   filaEdicion.descripcion = producto.descripcion
-  filaEdicion.costo = producto.costo
-  filaEdicion.margen = producto.margen * 100
-  filaEdicion.iva = producto.iva * 100
+  filaEdicion.costo = numeroSeguro(producto.costo, 0)
+  filaEdicion.margen = porcentajeEditableSeguro(producto.margen, 0)
+  filaEdicion.iva = porcentajeEditableSeguro(producto.iva, 0)
   filaEdicion.estado = producto.estado
+  mostrarFormularioEdicion.value = true
 }
 
 const cancelarEdicionFila = () => {
+  mostrarFormularioEdicion.value = false
+  productoEdicionId.value = null
   filaEdicionId.value = null
 }
 
-const guardarEdicionFila = async (producto: Producto) => {
+const guardarEdicionFila = async () => {
+  if (productoEdicionId.value === null) return
+  const producto = productos.find((item) => item.id === productoEdicionId.value)
+  if (!producto) {
+    errorForm.value = 'No se encontro el producto a editar.'
+    return
+  }
   const nombre = filaEdicion.nombre.trim()
   const codigoBarras = filaEdicion.codigoBarras.trim()
 
@@ -457,22 +577,25 @@ const guardarEdicionFila = async (producto: Producto) => {
   }
 
   const actualizado = nowUTCMinus5Iso()
+  const categoriaId = filaEdicion.categoriaId ?? producto.categoriaId
+  const costoSeguro = numeroSeguro(filaEdicion.costo, numeroSeguro(producto.costo, 0))
+  const margenSeguro = numeroSeguro(filaEdicion.margen, porcentajeEditableSeguro(producto.margen, 0))
+  const ivaSeguro = numeroSeguro(filaEdicion.iva, porcentajeEditableSeguro(producto.iva, 0))
+  const estadoSeguro = filaEdicion.estado ?? producto.estado
+  const descripcionSegura = filaEdicion.descripcion.trim() || producto.descripcion
+  const precioVentaSeguro = redondearPrecioMonedaCop(costoSeguro * (1 + margenSeguro / 100) * (1 + ivaSeguro / 100))
+
   const payload = {
     codigo_barras: codigoBarras,
     nombre,
-    categoria_id: filaEdicion.categoriaId,
-    descripcion: filaEdicion.descripcion.trim(),
-    costo: Number(filaEdicion.costo || 0),
-    margen: Number(filaEdicion.margen || 0) / 100,
-    iva: Number(filaEdicion.iva || 0) / 100,
-    precio_venta: Number(
-      (
-        Number(filaEdicion.costo || 0) *
-        (1 + Number(filaEdicion.margen || 0) / 100) *
-        (1 + Number(filaEdicion.iva || 0) / 100)
-      ).toFixed(0)
-    ),
-    estado: filaEdicion.estado === 'activo'
+    name: nombre,
+    categoria_id: categoriaId,
+    descripcion: descripcionSegura,
+    costo: costoSeguro,
+    margen: margenSeguro / 100,
+    iva: ivaSeguro / 100,
+    precio_venta: precioVentaSeguro,
+    estado: estadoSeguro === 'activo'
   }
   const payloadCompleto = {
     ...payload,
@@ -482,22 +605,40 @@ const guardarEdicionFila = async (producto: Producto) => {
 
   try {
     const respuesta = await actualizarProductoApi(producto.id, payload, payloadCompleto)
-    const normalizado = normalizarProducto(respuesta, 0)
-    if (normalizado) {
-      Object.assign(producto, normalizado)
-    } else {
+    const respuestaObj = (respuesta as Record<string, unknown>) ?? {}
+    if (respuestaObj.offline) {
       producto.codigoBarras = codigoBarras
       producto.nombre = nombre
-      producto.categoriaId = filaEdicion.categoriaId
-      producto.descripcion = filaEdicion.descripcion.trim()
-      producto.costo = Number(filaEdicion.costo || 0)
-      producto.margen = Number(filaEdicion.margen || 0) / 100
-      producto.iva = Number(filaEdicion.iva || 0) / 100
-      producto.precioVenta = Number(payload.precio_venta)
+      producto.categoriaId = categoriaId
+      producto.descripcion = descripcionSegura
+      producto.costo = costoSeguro
+      producto.margen = margenSeguro / 100
+      producto.iva = ivaSeguro / 100
+      producto.precioVenta = precioVentaSeguro
       producto.actualizadoPorId = producto.creadoPorId
       producto.fechaActualizacion = actualizado
-      producto.estado = filaEdicion.estado
+      producto.estado = estadoSeguro
+    } else {
+      const normalizado = normalizarProducto(respuesta, 0, producto)
+      if (normalizado) {
+        Object.assign(producto, normalizado)
+      } else {
+        producto.codigoBarras = codigoBarras
+        producto.nombre = nombre
+        producto.categoriaId = categoriaId
+        producto.descripcion = descripcionSegura
+        producto.costo = costoSeguro
+        producto.margen = margenSeguro / 100
+        producto.iva = ivaSeguro / 100
+        producto.precioVenta = precioVentaSeguro
+        producto.actualizadoPorId = producto.creadoPorId
+        producto.fechaActualizacion = actualizado
+        producto.estado = estadoSeguro
+      }
     }
+    guardarProductosCache()
+    mostrarFormularioEdicion.value = false
+    productoEdicionId.value = null
     filaEdicionId.value = null
   } catch (error) {
     console.error('Error al actualizar producto', error)
@@ -517,6 +658,7 @@ const toggleEstado = async (id: number) => {
   const payloadCompleto = {
     codigo_barras: item.codigoBarras,
     nombre: item.nombre,
+    name: item.nombre,
     categoria_id: item.categoriaId,
     descripcion: item.descripcion,
     costo: item.costo,
@@ -530,10 +672,14 @@ const toggleEstado = async (id: number) => {
 
   try {
     const respuesta = await actualizarProductoApi(item.id, payload, payloadCompleto)
-    const normalizado = normalizarProducto(respuesta, 0)
-    if (normalizado) {
-      Object.assign(item, normalizado)
+    const respuestaObj = (respuesta as Record<string, unknown>) ?? {}
+    if (!respuestaObj.offline) {
+      const normalizado = normalizarProducto(respuesta, 0, item)
+      if (normalizado) {
+        Object.assign(item, normalizado)
+      }
     }
+    guardarProductosCache()
   } catch (error) {
     console.error('Error al cambiar estado', error)
     item.estado = estadoAnterior
@@ -555,6 +701,9 @@ const categoriaNombre = (id: number | null) =>
       </div>
       <div class="productos__acciones">
         <SessionRoleChip />
+        <span :class="['estado-conexion', isOnline ? 'estado-conexion--online' : 'estado-conexion--offline']">
+          {{ isOnline ? 'En linea' : 'Offline' }}
+        </span>
         <button type="button" class="boton secundaria" @click="exportarProductos">Exportar</button>
         <button type="button" class="boton" @click="mostrarFormulario = true">Nuevo producto</button>
       </div>
@@ -721,6 +870,64 @@ const categoriaNombre = (id: number | null) =>
       </div>
     </section>
 
+    <section v-if="mostrarFormularioEdicion" class="formulario-modal">
+      <div class="panel form-panel">
+        <header class="panel__cabecera">
+          <h2>Editar producto</h2>
+          <button type="button" class="cerrar" @click="cancelarEdicionFila">Cerrar</button>
+        </header>
+
+        <form class="form" @submit.prevent="guardarEdicionFila">
+          <label>
+            <span>Codigo de barras</span>
+            <input v-model="filaEdicion.codigoBarras" type="text" placeholder="7701234500019" />
+          </label>
+          <label>
+            <span>Nombre</span>
+            <input v-model="filaEdicion.nombre" type="text" placeholder="Producto" />
+          </label>
+          <label>
+            <span>Categoria</span>
+            <select v-model="filaEdicion.categoriaId">
+              <option :value="null">Sin categoria</option>
+              <option v-for="categoria in categoriasActivas" :key="categoria.id" :value="categoria.id">
+                {{ categoria.nombre }}
+              </option>
+            </select>
+          </label>
+          <label>
+            <span>Descripcion</span>
+            <input v-model="filaEdicion.descripcion" type="text" placeholder="Opcional" />
+          </label>
+          <label>
+            <span>Costo</span>
+            <input v-model.number="filaEdicion.costo" type="number" min="0" step="1" />
+          </label>
+          <label>
+            <span>Margen %</span>
+            <input v-model.number="filaEdicion.margen" type="number" min="0" step="1" />
+          </label>
+          <label>
+            <span>IVA %</span>
+            <input v-model.number="filaEdicion.iva" type="number" min="0" step="0.01" />
+          </label>
+          <label>
+            <span>Precio venta</span>
+            <input v-model.number="precioVentaEdicion" type="number" min="0" step="1" />
+          </label>
+          <label>
+            <span>Estado</span>
+            <select v-model="filaEdicion.estado">
+              <option value="activo">Activo</option>
+              <option value="inactivo">Inactivo</option>
+            </select>
+          </label>
+          <button type="submit">Guardar cambios</button>
+          <p v-if="errorForm" class="error">{{ errorForm }}</p>
+        </form>
+      </div>
+    </section>
+
     <section class="panel tabla">
       <header class="tabla__cabecera">
         <h2>Listado de productos</h2>
@@ -737,7 +944,6 @@ const categoriaNombre = (id: number | null) =>
           <span>IVA</span>
           <span>Precio venta</span>
           <span>Estado</span>
-          <span>Actualizado</span>
           <span>Acciones</span>
         </div>
 
@@ -835,7 +1041,6 @@ const categoriaNombre = (id: number | null) =>
             </select>
           </span>
           <span v-else :class="['estado', producto.estado]">{{ producto.estado }}</span>
-          <span>{{ producto.fechaActualizacion }}</span>
           <div class="acciones">
             <template v-if="filaEdicionId === producto.id">
               <button
@@ -843,7 +1048,7 @@ const categoriaNombre = (id: number | null) =>
                 class="icono"
                 data-label="Guardar"
                 aria-label="Guardar"
-                @click="guardarEdicionFila(producto)"
+                @click="guardarEdicionFila"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path
@@ -949,6 +1154,27 @@ const categoriaNombre = (id: number | null) =>
   gap: 0.5rem;
 }
 
+.estado-conexion {
+  font-size: 0.68rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.16rem 0.45rem;
+  border: 1px solid transparent;
+  align-self: center;
+}
+
+.estado-conexion--online {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.estado-conexion--offline {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
 .boton {
   border: none;
   border-radius: 0.75rem;
@@ -1016,6 +1242,10 @@ const categoriaNombre = (id: number | null) =>
   gap: 1rem;
 }
 
+.tabla {
+  overflow-x: auto;
+}
+
 .panel__cabecera h2 {
   margin: 0 0 0.25rem;
 }
@@ -1046,12 +1276,16 @@ const categoriaNombre = (id: number | null) =>
   background: rgba(3, 6, 12, 0.6);
   display: grid;
   place-items: center;
+  align-content: start;
+  overflow-y: auto;
   padding: 1.5rem;
   z-index: 10;
 }
 
 .formulario-modal .panel {
   width: min(900px, 100%);
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
 }
 
 .form-panel .panel__cabecera {
@@ -1111,18 +1345,19 @@ const categoriaNombre = (id: number | null) =>
 
 .tabla__grid {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.9rem;
+  min-width: 1180px;
 }
 
 .tabla__fila {
   display: grid;
-  grid-template-columns: 2fr 1fr 0.7fr 0.6fr 0.6fr 0.9fr 0.7fr 0.9fr 1fr;
-  gap: 0.75rem;
-  align-items: center;
-  padding: 0.75rem 0.9rem;
+  grid-template-columns: 2.2fr 1.1fr 0.8fr 0.8fr 0.8fr 1fr 0.8fr 1fr;
+  gap: 0.45rem;
+  align-items: stretch;
+  padding: 0.4rem 0.55rem;
   border-radius: 0.8rem;
-  background: #0f1015;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(7, 9, 13, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .tabla__fila:hover {
@@ -1142,6 +1377,37 @@ const categoriaNombre = (id: number | null) =>
   background: transparent;
   border: none;
   padding: 0 0.5rem;
+  display: grid;
+}
+
+.tabla__encabezado > span:nth-child(3),
+.tabla__encabezado > span:nth-child(4),
+.tabla__encabezado > span:nth-child(5),
+.tabla__encabezado > span:nth-child(6) {
+  text-align: left;
+}
+
+.tabla__encabezado > span:nth-child(7),
+.tabla__encabezado > span:nth-child(8) {
+  text-align: left;
+}
+
+.tabla__fila > :nth-child(3),
+.tabla__fila > :nth-child(4),
+.tabla__fila > :nth-child(5),
+.tabla__fila > :nth-child(6) {
+  justify-self: stretch;
+  text-align: left;
+}
+
+.tabla__fila > :nth-child(7),
+.tabla__fila > :nth-child(8) {
+  justify-self: stretch;
+  text-align: left;
+}
+
+.tabla__fila:not(.tabla__encabezado) > * {
+  min-width: 0;
 }
 
 .tabla__cabecera {
@@ -1165,11 +1431,17 @@ const categoriaNombre = (id: number | null) =>
 }
 
 .producto__edicion input {
+  width: 100%;
+  min-width: 0;
   border-radius: 0.65rem;
   border: 1px solid rgba(148, 163, 184, 0.3);
   padding: 0.4rem 0.55rem;
   background: rgba(8, 10, 14, 0.9);
   color: #e2e8f0;
+}
+
+.tabla__fila > .producto {
+  min-width: 14rem;
 }
 
 .tabla__fila input,
@@ -1193,31 +1465,29 @@ const categoriaNombre = (id: number | null) =>
   color: #0b0d12;
   font-weight: 700;
   background: linear-gradient(120deg, #facc15, #fbbf24);
-  padding: 0.35rem 0.55rem;
+  padding: 0.2rem 0.42rem;
   border-radius: 0.6rem;
-  text-align: center;
+  text-align: left;
+  justify-self: start;
+  font-size: 0.9rem;
+  line-height: 1.1;
 }
 
 .estado {
-  font-size: 0.75rem;
-  padding: 0.25rem 0.6rem;
-  border-radius: 999px;
-  background: rgba(34, 197, 94, 0.15);
-  border: 1px solid rgba(34, 197, 94, 0.4);
-  color: #bbf7d0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #86efac;
   text-transform: capitalize;
 }
 
 .estado.inactivo {
-  background: rgba(248, 113, 113, 0.15);
-  border-color: rgba(248, 113, 113, 0.4);
-  color: #fecaca;
+  color: #fca5a5;
 }
 
 .acciones {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.35rem;
 }
 
 .icono {
@@ -1282,12 +1552,8 @@ const categoriaNombre = (id: number | null) =>
 }
 
 @media (max-width: 960px) {
-  .tabla__fila {
-    grid-template-columns: 1.6fr 1fr 0.7fr 0.6fr 0.6fr 0.9fr 1fr;
-  }
-
-  .tabla__fila .acciones {
-    grid-column: 1 / -1;
+  .tabla__grid {
+    min-width: 1180px;
   }
 }
 
@@ -1296,12 +1562,9 @@ const categoriaNombre = (id: number | null) =>
     flex-direction: column;
   }
 
-  .tabla__fila {
-    grid-template-columns: 1fr 1fr;
+  .tabla__grid {
+    min-width: 1180px;
   }
 
-  .tabla__encabezado {
-    display: none;
-  }
 }
 </style>
