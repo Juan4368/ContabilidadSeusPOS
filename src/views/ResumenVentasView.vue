@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { ENDPOINTS } from '../config/endpoints'
 import { getSessionCajaNombre } from '../utils/session'
+import { nowUTCMinus5Iso } from '../utils/time'
 
 type ResumenVenta = {
   id?: number
@@ -360,28 +361,31 @@ const formatFechaCorta = (valor: string) => {
   const fecha = new Date(valor)
   if (Number.isNaN(fecha.getTime())) return valor
   const pad = (num: number) => num.toString().padStart(2, '0')
-  return `${pad(fecha.getDate())}-${pad(fecha.getMonth() + 1)}-${fecha.getFullYear()} ${pad(
-    fecha.getHours()
-  )}:${pad(fecha.getMinutes())}`
+  return `${pad(fecha.getUTCDate())}-${pad(fecha.getUTCMonth() + 1)}-${fecha.getUTCFullYear()} ${pad(
+    fecha.getUTCHours()
+  )}:${pad(fecha.getUTCMinutes())}`
 }
 
 const criterioBusqueda = ref('')
-const hoyIso = new Date().toISOString().slice(0, 10)
+const hoyIso = nowUTCMinus5Iso().slice(0, 10)
 const fechaDesde = ref(hoyIso)
 const fechaHasta = ref(hoyIso)
 const tipoPagoFiltro = ref<'todos' | 'efectivo' | 'transferencia' | 'tarjeta' | 'credito'>('todos')
 
 const resumenFiltrado = computed(() => {
   const termino = criterioBusqueda.value.trim().toLowerCase()
-  const desde = fechaDesde.value ? new Date(`${fechaDesde.value}T00:00:00`) : null
-  const hasta = fechaHasta.value ? new Date(`${fechaHasta.value}T23:59:59`) : null
+  const desde = fechaDesde.value || null
+  const hasta = fechaHasta.value || null
   return [...resumenes.value].filter((item) => {
     if (item.estado !== true) return false
     const subtotalNum = Number(item.subtotal ?? 0)
     if (!Number.isFinite(subtotalNum) || subtotalNum <= 0) return false
     const fechaItem = new Date(String(item.fecha ?? ''))
-    if (desde && !Number.isNaN(fechaItem.getTime()) && fechaItem < desde) return false
-    if (hasta && !Number.isNaN(fechaItem.getTime()) && fechaItem > hasta) return false
+    if (!Number.isNaN(fechaItem.getTime())) {
+      const fechaItemIso = fechaItem.toISOString().slice(0, 10)
+      if (desde && fechaItemIso < desde) return false
+      if (hasta && fechaItemIso > hasta) return false
+    }
     const tipo = (item.tipo_pago ?? '').toString().toLowerCase()
     const esCredito = item.es_credito
     if (tipoPagoFiltro.value !== 'todos') {

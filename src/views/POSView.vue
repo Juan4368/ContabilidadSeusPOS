@@ -56,6 +56,8 @@ const DEFAULT_PROVEEDOR_ID = 0
 const DEFAULT_CAJA_ID = 1
 const PRECIO_BOLSA = 300
 const BOLSA_PRODUCTO_ID = 1
+const DEFAULT_CLIENTE_TELEFONO = '0000000000'
+const DEFAULT_CLIENTE_EMAIL = 'cliente@correo.com'
 
 const getSessionCajaNombre = () => {
   try {
@@ -106,6 +108,15 @@ const payloadMovimiento = ref<string | null>(null)
 const mostrarPayloadVenta = ref(false)
 const mostrarTicketModal = ref(false)
 const mostrarResumenCobro = ref(false)
+const mostrarCrearClienteModal = ref(false)
+const creandoClienteRapido = ref(false)
+const errorCrearClienteRapido = ref('')
+const nuevoClienteForm = ref({
+  nombre: '',
+  telefono: '',
+  email: ''
+})
+const clienteNombreModalRef = ref<HTMLInputElement | null>(null)
 const payloadVentaTexto = computed(() => (payloadVenta.value ? JSON.stringify(payloadVenta.value, null, 2) : ''))
 const resumenCobro = ref<ResumenCobro>({
   subtotal: 0,
@@ -310,7 +321,9 @@ const cargarVentaPendienteDesdeApi = (venta: Record<string, unknown>) => {
   clienteId.value = clienteRaw ? String(clienteRaw) : null
   notaRapida.value = String(venta.nota_venta ?? venta.nota ?? '')
   const tipoPagoRaw = venta.tipo_pago ?? venta.tipoPago
-  if (tipoPagoRaw === null) {
+  const esCreditoRaw = venta.es_credito ?? venta.esCredito
+  const esCredito = esCreditoRaw === true
+  if (tipoPagoRaw === null || (!tipoPagoRaw && esCredito)) {
     tipoPago.value = 'credito'
   } else if (typeof tipoPagoRaw === 'string' && tipoPagoRaw.trim()) {
     tipoPago.value = tipoPagoRaw
@@ -430,6 +443,7 @@ const clienteSeleccionado = computed(
 const clienteQuery = ref('')
 const clienteDropdownOpen = ref(false)
 const clienteDropdownRef = ref<HTMLElement | null>(null)
+const cargandoClientes = ref(false)
 const clientesFiltrados = computed(() => {
   const term = normalizarTexto(clienteQuery.value)
   if (!term) return clientes.value
@@ -480,6 +494,88 @@ const extraerCodigosEntrada = (entrada: string) =>
 const formatearCodigosBarras = (codigo: string | string[] | undefined) => {
   const codigos = extraerCodigosBarras(codigo)
   return codigos.length ? codigos.join(' · ') : ''
+}
+const mapearClienteApi = (item: unknown, index = 0): Cliente | null => {
+  if (!item || typeof item !== 'object') return null
+  const cliente = item as Record<string, unknown>
+  const id = String(cliente.cliente_id ?? cliente.id ?? cliente.pk ?? index + 1)
+  const nombre = String(cliente.nombre ?? cliente.name ?? 'Cliente')
+  const documentoRaw = cliente.documento ?? cliente.identificacion ?? cliente.nit
+  const documento = documentoRaw ? String(documentoRaw) : undefined
+  const descuentoPesos = Number(cliente.descuento_pesos ?? cliente.descuentoPesos ?? 0)
+  const descuentoPorcentaje = Number(cliente.descuento_porcentaje ?? cliente.descuentoPorcentaje ?? 0) * 100
+  return { id, nombre, documento, descuentoPesos, descuentoPorcentaje }
+}
+const upsertCliente = (cliente: Cliente) => {
+  const idx = clientes.value.findIndex((item) => item.id === cliente.id)
+  if (idx >= 0) {
+    clientes.value[idx] = cliente
+    return
+  }
+  clientes.value.unshift(cliente)
+}
+const abrirListaClientes = () => {
+  clienteDropdownOpen.value = true
+  void cargarClientes()
+}
+const abrirModalCrearCliente = () => {
+  nuevoClienteForm.value.nombre = clienteQuery.value.trim()
+  nuevoClienteForm.value.telefono = ''
+  nuevoClienteForm.value.email = ''
+  errorCrearClienteRapido.value = ''
+  mostrarCrearClienteModal.value = true
+  void nextTick(() => {
+    clienteNombreModalRef.value?.focus()
+    clienteNombreModalRef.value?.select()
+  })
+}
+const cerrarModalCrearCliente = () => {
+  mostrarCrearClienteModal.value = false
+  errorCrearClienteRapido.value = ''
+}
+const confirmarCrearClienteRapido = async () => {
+  const nombre = nuevoClienteForm.value.nombre.trim()
+  if (!nombre) {
+    errorCrearClienteRapido.value = 'Ingresa el nombre del cliente.'
+    return
+  }
+  if (creandoClienteRapido.value) return
+  creandoClienteRapido.value = true
+  errorCrearClienteRapido.value = ''
+  try {
+    const respuesta = await fetch(CLIENTES_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nombre,
+        telefono: nuevoClienteForm.value.telefono.trim() || DEFAULT_CLIENTE_TELEFONO,
+        email: nuevoClienteForm.value.email.trim().toLowerCase() || DEFAULT_CLIENTE_EMAIL,
+        descuento_pesos: 0,
+        descuento_porcentaje: 0
+      })
+    })
+    if (!respuesta.ok) {
+      const detalle = await respuesta.text().catch(() => '')
+      throw new Error(detalle || `Error ${respuesta.status}`)
+    }
+    const data = (await respuesta.json().catch(() => ({}))) as Record<string, unknown>
+    const payload = (data.data as Record<string, unknown> | undefined) ?? data
+    const nuevo = mapearClienteApi(payload) ?? {
+      id: String(Date.now()),
+      nombre: nombre.trim(),
+      documento: undefined,
+      descuentoPesos: 0,
+      descuentoPorcentaje: 0
+    }
+    upsertCliente(nuevo)
+    seleccionarCliente(nuevo)
+    cerrarModalCrearCliente()
+  } catch (error) {
+    const detalle = error instanceof Error ? error.message : String(error)
+    errorCrearClienteRapido.value = `No fue posible crear el cliente. ${detalle}`
+  } finally {
+    creandoClienteRapido.value = false
+  }
 }
 const matchProductoBusqueda = (producto: Producto, termino: string) => {
   if (!termino) return false
@@ -586,6 +682,8 @@ const cargarProductos = async () => {
 }
 
 const cargarClientes = async () => {
+  if (cargandoClientes.value) return
+  cargandoClientes.value = true
   try {
     const logClientes = async (lines: string[]) => {
       try {
@@ -609,23 +707,15 @@ const cargarClientes = async () => {
     await logClientes([`response status=${respuesta.status} ok=true body=${JSON.stringify(data)}`])
     const lista = Array.isArray(data) ? data : Array.isArray(data.results) ? data.results : Array.isArray(data.data) ? data.data : []
     const normalizados = lista
-      .map((item: unknown, index: number) => {
-        if (!item || typeof item !== 'object') return null
-        const cliente = item as Record<string, unknown>
-        const id = String(cliente.cliente_id ?? cliente.id ?? cliente.pk ?? index + 1)
-        const nombre = String(cliente.nombre ?? cliente.name ?? 'Cliente')
-        const documentoRaw = cliente.documento ?? cliente.identificacion ?? cliente.nit
-        const documento = documentoRaw ? String(documentoRaw) : undefined
-        const descuentoPesos = Number(cliente.descuento_pesos ?? cliente.descuentoPesos ?? 0)
-        const descuentoPorcentaje = Number(cliente.descuento_porcentaje ?? cliente.descuentoPorcentaje ?? 0) * 100
-        return { id, nombre, documento, descuentoPesos, descuentoPorcentaje }
-      })
+      .map((item: unknown, index: number) => mapearClienteApi(item, index))
       .filter(Boolean) as Cliente[]
     if (normalizados.length) {
       clientes.value = normalizados
     }
   } catch (error) {
     console.error('No se pudieron cargar clientes', error)
+  } finally {
+    cargandoClientes.value = false
   }
 }
 
@@ -873,7 +963,8 @@ const construirDetallesVenta = () => {
 
 const construirPayloadVenta = (estadoOverride?: boolean) => {
   const redondear2 = (valor: number) => Math.round(Number(valor) * 100) / 100
-  const tipoPagoPayload = tipoPago.value === 'credito' ? null : tipoPago.value
+  const esCredito = tipoPago.value === 'credito'
+  const tipoPagoPayload = esCredito ? 'credito' : tipoPago.value
   const clientePayload = clienteId.value ?? 'e7098aa3-ea98-4a42-a019-2bf75a16a1ea'
   const usuarioPayload = getSessionUserId()
   if (!usuarioPayload) {
@@ -881,6 +972,7 @@ const construirPayloadVenta = (estadoOverride?: boolean) => {
   }
   return {
     tipo_pago: tipoPagoPayload,
+    es_credito: esCredito,
     estado: typeof estadoOverride === 'boolean' ? estadoOverride : estadoVenta.value,
     nota_venta: notaRapida.value || null,
     user_id: usuarioPayload,
@@ -1830,14 +1922,20 @@ const imprimirTicketResumen = async () => {
       <section class="panel productos">
         <div class="panel__encabezado">
           <div ref="clienteDropdownRef" class="cliente-select">
-            <label class="cliente-select__label">Cliente</label>
+            <div class="cliente-select__head">
+              <label class="cliente-select__label">Cliente</label>
+              <button type="button" class="cliente-select__create" @click="abrirModalCrearCliente">
+                Crear cliente{{ clienteQuery.trim() ? `: ${clienteQuery.trim()}` : '' }}
+              </button>
+            </div>
             <input
               v-model="clienteQuery"
               type="text"
               class="cliente-select__input"
               placeholder="Buscar cliente..."
-              @focus="clienteDropdownOpen = true"
-              @input="clienteDropdownOpen = true"
+              @focus="abrirListaClientes"
+              @click="abrirListaClientes"
+              @input="abrirListaClientes"
             />
             <ul v-if="clienteDropdownOpen" class="cliente-select__list" role="listbox">
               <li>
@@ -2094,6 +2192,62 @@ const imprimirTicketResumen = async () => {
       </div>
       </section>
     </section>
+
+    <div
+      v-if="mostrarCrearClienteModal"
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      tabindex="0"
+      @keydown.esc.prevent="cerrarModalCrearCliente"
+      @keydown.ctrl.enter.prevent="void confirmarCrearClienteRapido()"
+      @keydown.meta.enter.prevent="void confirmarCrearClienteRapido()"
+      @click.self="cerrarModalCrearCliente"
+    >
+      <section class="modal__contenido" @click.stop>
+        <div class="modal__encabezado">
+          <h2>Crear cliente</h2>
+          <button type="button" class="modal__cerrar" @click="cerrarModalCrearCliente">x</button>
+        </div>
+        <div class="modal__form">
+          <label>
+            Nombre
+            <input
+              ref="clienteNombreModalRef"
+              v-model="nuevoClienteForm.nombre"
+              type="text"
+              placeholder="Nombre del cliente"
+              @keydown.enter.prevent="void confirmarCrearClienteRapido()"
+            />
+          </label>
+          <label>
+            Telefono
+            <input
+              v-model="nuevoClienteForm.telefono"
+              type="text"
+              placeholder="3001234567"
+              @keydown.enter.prevent="void confirmarCrearClienteRapido()"
+            />
+          </label>
+          <label>
+            Email
+            <input
+              v-model="nuevoClienteForm.email"
+              type="email"
+              placeholder="cliente@correo.com"
+              @keydown.enter.prevent="void confirmarCrearClienteRapido()"
+            />
+          </label>
+        </div>
+        <p v-if="errorCrearClienteRapido" class="cliente-modal__error">{{ errorCrearClienteRapido }}</p>
+        <div class="modal__acciones">
+          <button type="button" class="boton secundaria" @click="cerrarModalCrearCliente">Cancelar</button>
+          <button type="button" class="boton" :disabled="creandoClienteRapido" @click="void confirmarCrearClienteRapido()">
+            {{ creandoClienteRapido ? 'Guardando...' : 'Guardar cliente' }}
+          </button>
+        </div>
+      </section>
+    </div>
 
     <div
       v-if="mostrarTicketModal"
@@ -2392,10 +2546,34 @@ const imprimirTicketResumen = async () => {
   gap: 0.35rem;
 }
 
+.cliente-select__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .cliente-select__label {
   color: #e5e7eb;
   font-weight: 600;
   font-size: 0.9rem;
+}
+
+.cliente-select__create {
+  border: 1px solid #3b82f6;
+  background: #1e3a8a;
+  color: #dbeafe;
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.cliente-select__create:hover,
+.cliente-select__create:focus-visible {
+  outline: none;
+  border-color: #60a5fa;
+  background: #1d4ed8;
 }
 
 .cliente-select__input {
@@ -3207,6 +3385,12 @@ const imprimirTicketResumen = async () => {
   font-weight: 600;
 }
 
+.cliente-modal__error {
+  margin: 0;
+  color: #fecaca;
+  font-size: 0.85rem;
+}
+
 .modal__cerrar {
   border: 1px solid #4a4a4a;
   background: #2b2b2b;
@@ -3320,5 +3504,6 @@ const imprimirTicketResumen = async () => {
   }
 }
 </style>
+
 
 
