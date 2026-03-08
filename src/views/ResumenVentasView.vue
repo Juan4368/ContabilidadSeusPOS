@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import SessionRoleChip from '../components/SessionRoleChip.vue'
 import { ENDPOINTS } from '../config/endpoints'
 import { getSessionCajaNombre } from '../utils/session'
@@ -371,6 +371,53 @@ const hoyIso = nowUTCMinus5Iso().slice(0, 10)
 const fechaDesde = ref(hoyIso)
 const fechaHasta = ref(hoyIso)
 const tipoPagoFiltro = ref<'todos' | 'efectivo' | 'transferencia' | 'tarjeta' | 'credito'>('todos')
+const paginaActual = ref(1)
+const tamanioPagina = ref(25)
+const totalRegistrosServidor = ref(0)
+const usaPaginacionServidor = ref(false)
+
+const construirUrlResumen = () => {
+  const base = new URL(ENDPOINTS.VENTAS_RESUMEN)
+  base.searchParams.set('page', String(paginaActual.value))
+  base.searchParams.set('page_size', String(tamanioPagina.value))
+  const termino = criterioBusqueda.value.trim()
+  if (termino) base.searchParams.set('search', termino)
+  if (fechaDesde.value) base.searchParams.set('desde', fechaDesde.value)
+  if (fechaHasta.value) base.searchParams.set('hasta', fechaHasta.value)
+  if (tipoPagoFiltro.value !== 'todos') base.searchParams.set('tipo_pago', tipoPagoFiltro.value)
+  return base.toString()
+}
+
+const extraerListaRespuesta = (data: unknown) => {
+  if (Array.isArray(data)) return data as unknown[]
+  const objeto = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
+  if (Array.isArray(objeto.results)) return objeto.results as unknown[]
+  if (Array.isArray(objeto.data)) return objeto.data as unknown[]
+  return []
+}
+
+const extraerTotalRespuesta = (data: unknown, fallback: number) => {
+  const objeto = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
+  const candidatos = [objeto.count, objeto.total, objeto.total_count, objeto.totalCount]
+  for (const valor of candidatos) {
+    const numero = Number(valor)
+    if (Number.isFinite(numero) && numero >= 0) return numero
+  }
+  return fallback
+}
+
+const esRespuestaPaginada = (data: unknown) => {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+  const objeto = data as Record<string, unknown>
+  return (
+    Array.isArray(objeto.results) ||
+    Array.isArray(objeto.data) ||
+    typeof objeto.count === 'number' ||
+    typeof objeto.total === 'number' ||
+    objeto.next !== undefined ||
+    objeto.previous !== undefined
+  )
+}
 
 const resumenFiltrado = computed(() => {
   const termino = criterioBusqueda.value.trim().toLowerCase()
@@ -406,6 +453,23 @@ const resumenOrdenado = computed(() => {
   return resumenFiltrado.value.sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0))
 })
 
+const totalRegistrosFiltrados = computed(() => {
+  if (usaPaginacionServidor.value) return Math.max(0, Number(totalRegistrosServidor.value || 0))
+  return resumenOrdenado.value.length
+})
+
+const totalPaginas = computed(() => {
+  const tam = Math.max(1, Number(tamanioPagina.value || 1))
+  return Math.max(1, Math.ceil(totalRegistrosFiltrados.value / tam))
+})
+
+const resumenPagina = computed(() => {
+  if (usaPaginacionServidor.value) return resumenOrdenado.value
+  const tam = Math.max(1, Number(tamanioPagina.value || 1))
+  const inicio = (Math.max(1, paginaActual.value) - 1) * tam
+  return resumenOrdenado.value.slice(inicio, inicio + tam)
+})
+
 const resumenPagos = computed(() => {
   const totales = {
     efectivo: 0,
@@ -439,19 +503,15 @@ const cargarResumen = async () => {
   cargando.value = true
   error.value = null
   try {
-    const respuesta = await fetch(ENDPOINTS.VENTAS_RESUMEN)
+    const respuesta = await fetch(construirUrlResumen())
     if (!respuesta.ok) {
       const detalle = await respuesta.text().catch(() => '')
       throw new Error(detalle || `Error ${respuesta.status}`)
     }
     const data = (await respuesta.json()) as unknown
-    const lista = (Array.isArray(data)
-      ? data
-      : Array.isArray((data as Record<string, unknown>)?.results)
-        ? (data as Record<string, unknown>).results
-        : Array.isArray((data as Record<string, unknown>)?.data)
-          ? (data as Record<string, unknown>).data
-          : []) as unknown[]
+    usaPaginacionServidor.value = esRespuestaPaginada(data)
+    const lista = extraerListaRespuesta(data)
+    totalRegistrosServidor.value = extraerTotalRespuesta(data, lista.length)
     resumenes.value = lista
       .map((item: unknown) => {
         if (!item || typeof item !== 'object') return null
@@ -479,6 +539,35 @@ const cargarResumen = async () => {
     cargando.value = false
   }
 }
+
+const irPagina = (pagina: number) => {
+  const destino = Math.max(1, Math.min(totalPaginas.value, Math.floor(Number(pagina) || 1)))
+  if (destino === paginaActual.value) return
+  paginaActual.value = destino
+  if (usaPaginacionServidor.value) {
+    void cargarResumen()
+  }
+}
+
+watch([criterioBusqueda, fechaDesde, fechaHasta, tipoPagoFiltro], () => {
+  paginaActual.value = 1
+  if (usaPaginacionServidor.value) {
+    void cargarResumen()
+  }
+})
+
+watch(tamanioPagina, () => {
+  paginaActual.value = 1
+  if (usaPaginacionServidor.value) {
+    void cargarResumen()
+  }
+})
+
+watch(totalPaginas, (nuevoTotal) => {
+  if (paginaActual.value > nuevoTotal) {
+    paginaActual.value = nuevoTotal
+  }
+})
 
 const actualizarEstadoVenta = async (item: ResumenVenta) => {
   try {
@@ -772,7 +861,7 @@ onMounted(() => {
     </section>
 
     <section class="tabla tabla--modulo">
-      <div v-if="!cargando && resumenOrdenado.length === 0" class="vacio">Sin datos para mostrar.</div>
+      <div v-if="!cargando && resumenPagina.length === 0" class="vacio">Sin datos para mostrar.</div>
       <table class="tabla__grid" v-else>
         <colgroup>
         <col style="width: 10%" />
@@ -801,7 +890,7 @@ onMounted(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="item in resumenOrdenado" :key="`${item.numero_factura}-${item.fecha}`">
+          <tr v-for="item in resumenPagina" :key="`${item.numero_factura}-${item.fecha}`">
             <td>{{ formatFechaCorta(item.fecha) }}</td>
             <td>{{ item.numero_factura }}</td>
             <td>{{ item.cliente_nombre }}</td>
@@ -823,6 +912,49 @@ onMounted(() => {
           </tr>
         </tbody>
       </table>
+      <footer class="paginacion">
+        <label class="paginacion__tam">
+          Filas
+          <select v-model.number="tamanioPagina">
+            <option :value="10">10</option>
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+          </select>
+        </label>
+        <p class="paginacion__meta">
+          Página {{ paginaActual }} de {{ totalPaginas }} · Registros {{ totalRegistrosFiltrados }}
+        </p>
+        <div class="paginacion__acciones">
+          <button type="button" class="boton secundario" :disabled="paginaActual <= 1" @click="irPagina(1)">
+            Primera
+          </button>
+          <button
+            type="button"
+            class="boton secundario"
+            :disabled="paginaActual <= 1"
+            @click="irPagina(paginaActual - 1)"
+          >
+            Anterior
+          </button>
+          <button
+            type="button"
+            class="boton secundario"
+            :disabled="paginaActual >= totalPaginas"
+            @click="irPagina(paginaActual + 1)"
+          >
+            Siguiente
+          </button>
+          <button
+            type="button"
+            class="boton secundario"
+            :disabled="paginaActual >= totalPaginas"
+            @click="irPagina(totalPaginas)"
+          >
+            Última
+          </button>
+        </div>
+      </footer>
     </section>
 
     <div v-if="detalleVenta" class="modal" role="dialog" aria-modal="true" @click.self="cerrarDetalle">
@@ -1047,6 +1179,44 @@ onMounted(() => {
 
 .tabla__grid tbody tr:last-child td {
   border-bottom: none;
+}
+
+.paginacion {
+  margin-top: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.paginacion__tam {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+}
+
+.paginacion__tam select {
+  border-radius: 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(12, 13, 16, 0.9);
+  color: #e2e8f0;
+  padding: 0.35rem 0.5rem;
+}
+
+.paginacion__meta {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.paginacion__acciones {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
 }
 
 .col-num {

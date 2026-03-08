@@ -12,6 +12,8 @@ const QUEUE_KEY = 'offline_queue_v1'
 const CACHE_KEY = 'offline_cache_v1'
 const NO_QUEUE_PATHS = ['/auth/login', '/auth/register']
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24
+const MAX_CACHE_ENTRIES = 120
+const MAX_CACHE_BODY_CHARS = 120_000
 
 const readQueue = (): OfflineRequest[] => {
   try {
@@ -47,8 +49,44 @@ const readCache = (): Record<string, CacheEntry> => {
   }
 }
 
+const isQuotaExceededError = (error: unknown) => {
+  return error instanceof DOMException && (error.name === 'QuotaExceededError' || error.code === 22)
+}
+
+const trimCache = (cache: Record<string, CacheEntry>) => {
+  const now = Date.now()
+  const keys = Object.keys(cache)
+  const expired = keys.filter((key) => now - Number(cache[key]?.savedAt ?? 0) > CACHE_TTL_MS)
+  expired.forEach((key) => {
+    delete cache[key]
+  })
+  const remaining = Object.keys(cache)
+  if (remaining.length <= MAX_CACHE_ENTRIES) return
+  const sorted = remaining.sort((a, b) => Number(cache[a]?.savedAt ?? 0) - Number(cache[b]?.savedAt ?? 0))
+  const toDelete = sorted.length - MAX_CACHE_ENTRIES
+  for (let i = 0; i < toDelete; i += 1) {
+    delete cache[sorted[i]]
+  }
+}
+
+const writeCacheSafely = (cache: Record<string, CacheEntry>) => {
+  trimCache(cache)
+  const keysByAge = Object.keys(cache).sort((a, b) => Number(cache[a]?.savedAt ?? 0) - Number(cache[b]?.savedAt ?? 0))
+  while (true) {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
+      return
+    } catch (error) {
+      if (!isQuotaExceededError(error) || keysByAge.length === 0) return
+      const oldestKey = keysByAge.shift()
+      if (!oldestKey) return
+      delete cache[oldestKey]
+    }
+  }
+}
+
 const writeCache = (cache: Record<string, CacheEntry>) => {
-  localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
+  writeCacheSafely(cache)
 }
 
 const shouldQueue = (url: string, method: string) => {
@@ -224,6 +262,9 @@ export const initOfflineQueue = () => {
     if (method === 'GET' && response.ok) {
       const cloned = response.clone()
       const body = await cloned.text()
+      if (body.length > MAX_CACHE_BODY_CHARS) {
+        return response
+      }
       const headers = Object.fromEntries(cloned.headers.entries())
       const cache = readCache()
       cache[url] = {

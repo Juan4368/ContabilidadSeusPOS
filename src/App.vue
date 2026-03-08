@@ -573,21 +573,25 @@ hidratarSesion()
                   <button v-else-if="!cajas.length" type="button" class="selector__caja" disabled>
                     Sin cajas
                   </button>
-                  <button
-                    v-for="caja in cajas"
-                    v-else
-                    :key="caja.id"
-                    type="button"
-                    :class="[
-                      'selector__caja',
-                      { activa: sesionCajaId === caja.id, bloqueada: caja.estado === 'ABIERTA' }
-                    ]"
-                    :disabled="actualizandoCaja || (cajaAbiertaEnSesion && sesionCajaId !== caja.id && caja.estado !== 'ABIERTA')"
-                    @click="seleccionarCaja(caja)"
-                  >
-                    <span>{{ caja.nombre ?? `Caja ${caja.id}` }}</span>
-                    <small v-if="caja.estado === 'ABIERTA'">ABIERTA</small>
-                  </button>
+                  <template v-else>
+                    <button
+                      v-for="caja in cajas"
+                      :key="caja.id"
+                      type="button"
+                      :class="[
+                        'selector__caja',
+                        { activa: sesionCajaId === caja.id, bloqueada: caja.estado === 'ABIERTA' }
+                      ]"
+                      :disabled="
+                        actualizandoCaja ||
+                        (cajaAbiertaEnSesion && sesionCajaId !== caja.id && caja.estado !== 'ABIERTA')
+                      "
+                      @click="seleccionarCaja(caja)"
+                    >
+                      <span>{{ caja.nombre ?? `Caja ${caja.id}` }}</span>
+                      <small v-if="caja.estado === 'ABIERTA'">ABIERTA</small>
+                    </button>
+                  </template>
                 </div>
                 <small v-if="errorCajas" class="selector__cajas-error">{{ errorCajas }}</small>
               </div>

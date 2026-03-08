@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import SessionRoleChip from '../components/SessionRoleChip.vue'
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ENDPOINTS } from '../config/endpoints'
+import { readProductosCache, writeProductosCache } from '../utils/productosCache'
 import { nowUTCMinus5Iso } from '../utils/time'
 
 type Producto = {
@@ -68,6 +69,8 @@ const form = reactive({
 const filtroTexto = ref('')
 const filtroCategoria = ref('Todas')
 const filtroEstado = ref<'todos' | 'activo' | 'inactivo'>('todos')
+const paginaActual = ref(1)
+const tamanioPagina = ref(25)
 const errorForm = ref('')
 const mostrarFormulario = ref(false)
 const mostrarFormularioEdicion = ref(false)
@@ -204,23 +207,14 @@ const actualizarEstadoConexion = () => {
   isOnline.value = navigator.onLine
 }
 
-const leerProductosCache = (): Producto[] => {
-  try {
-    const raw = localStorage.getItem(PRODUCTOS_CACHE_KEY)
-    if (!raw) return []
-    const data = JSON.parse(raw) as Producto[]
-    return Array.isArray(data) ? data : []
-  } catch {
-    return []
-  }
+const leerProductosCache = async (): Promise<Producto[]> => {
+  const data = await readProductosCache<Producto[]>(PRODUCTOS_CACHE_KEY)
+  return Array.isArray(data) ? data : []
 }
 
-const guardarProductosCache = (lista: Producto[] = productos) => {
-  try {
-    localStorage.setItem(PRODUCTOS_CACHE_KEY, JSON.stringify(lista))
-  } catch {
-    // Ignora errores de almacenamiento
-  }
+const guardarProductosCache = async (lista: Producto[] = productos) => {
+  const plano = lista.map((item) => ({ ...item }))
+  await writeProductosCache(PRODUCTOS_CACHE_KEY, plano)
 }
 
 const exportarProductos = () => {
@@ -237,7 +231,7 @@ const exportarProductos = () => {
     'fecha_actualizacion'
   ]
 
-  const filas = productosFiltrados.value.length ? productosFiltrados.value : productos
+  const filas = productosFiltrados.value
   const contenido = [
     encabezados.join(','),
     ...filas.map((producto) => {
@@ -277,7 +271,7 @@ const eliminarProducto = async (producto: Producto) => {
     const index = productos.findIndex((item) => item.id === producto.id)
     if (index >= 0) {
       productos.splice(index, 1)
-      guardarProductosCache()
+      await guardarProductosCache()
     }
   } catch (error) {
     console.error('Error al eliminar producto', error)
@@ -288,7 +282,8 @@ const normalizarProducto = (item: unknown, index: number, base?: Producto): Prod
   if (!item || typeof item !== 'object') return null
   const producto = item as Record<string, unknown>
   const id = Number(producto.producto_id ?? producto.id ?? producto.pk ?? base?.id ?? index + 1)
-  const codigoBarras = String(producto.codigo_barras ?? producto.codigoBarras ?? base?.codigoBarras ?? '')
+  const codigoBarrasRaw = producto.codigo_barras ?? producto.codigoBarras ?? base?.codigoBarras ?? ''
+  const codigoBarras = codigoBarrasRaw == null ? '' : String(codigoBarrasRaw).trim()
   const nombre = String(producto.nombre ?? producto.name ?? base?.nombre ?? 'Producto')
   const categoriaId = producto.categoria_id ?? producto.categoriaId ?? base?.categoriaId ?? null
   const categoriaIdNumero = categoriaId === null ? null : Number(categoriaId)
@@ -370,7 +365,7 @@ const extraerLista = (data: unknown): unknown[] => {
 }
 
 const cargarProductos = async () => {
-  const cache = leerProductosCache()
+  const cache = await leerProductosCache()
   if (cache.length) {
     productos.splice(0, productos.length, ...cache)
   }
@@ -394,7 +389,7 @@ const cargarProductos = async () => {
 
     if (normalizados.length) {
       productos.splice(0, productos.length, ...normalizados)
-      guardarProductosCache(normalizados)
+      await guardarProductosCache(normalizados)
     }
   } catch (error) {
     actualizarEstadoConexion()
@@ -460,18 +455,58 @@ const resumen = computed(() => {
 
 const productosFiltrados = computed(() => {
   const termino = filtroTexto.value.toLowerCase().trim()
-  if (!termino) return []
   return productos.filter((producto) => {
     const categoria = categoriaNombre(producto.categoriaId)
-    const matchTexto =
-      producto.nombre.toLowerCase().includes(termino) ||
-      producto.codigoBarras.toLowerCase().includes(termino) ||
-      producto.descripcion.toLowerCase().includes(termino) ||
-      categoria.toLowerCase().includes(termino)
+    const nombre = String(producto.nombre ?? '').toLowerCase()
+    const codigoBarras = String(producto.codigoBarras ?? '').toLowerCase()
+    const descripcion = String(producto.descripcion ?? '').toLowerCase()
+    const categoriaTexto = String(categoria ?? '').toLowerCase()
+    const matchTexto = !termino
+      ? true
+      : nombre.includes(termino) ||
+        codigoBarras.includes(termino) ||
+        descripcion.includes(termino) ||
+        categoriaTexto.includes(termino)
     const matchCategoria = filtroCategoria.value === 'Todas' || categoria === filtroCategoria.value
     const matchEstado = filtroEstado.value === 'todos' || producto.estado === filtroEstado.value
     return matchTexto && matchCategoria && matchEstado
   })
+})
+
+const totalPaginas = computed(() => {
+  const tam = Math.max(1, Number(tamanioPagina.value || 1))
+  return Math.max(1, Math.ceil(productosFiltrados.value.length / tam))
+})
+
+const productosPaginados = computed(() => {
+  const tam = Math.max(1, Number(tamanioPagina.value || 1))
+  const inicio = (Math.max(1, paginaActual.value) - 1) * tam
+  return productosFiltrados.value.slice(inicio, inicio + tam)
+})
+
+const indiceInicio = computed(() => {
+  if (!productosFiltrados.value.length) return 0
+  return (paginaActual.value - 1) * tamanioPagina.value + 1
+})
+
+const indiceFin = computed(() => {
+  if (!productosFiltrados.value.length) return 0
+  return Math.min(paginaActual.value * tamanioPagina.value, productosFiltrados.value.length)
+})
+
+const irPagina = (pagina: number) => {
+  const destino = Math.max(1, Math.min(totalPaginas.value, Math.floor(Number(pagina) || 1)))
+  paginaActual.value = destino
+}
+
+watch([filtroTexto, filtroCategoria, filtroEstado, tamanioPagina], () => {
+  paginaActual.value = 1
+})
+
+watch(productosFiltrados, () => {
+  if (paginaActual.value > totalPaginas.value) {
+    paginaActual.value = totalPaginas.value
+  }
 })
 
 const formatCurrency = (monto: number) =>
@@ -498,13 +533,13 @@ const crearProducto = async () => {
   const nombre = form.nombre.trim()
   const codigoBarras = form.codigoBarras.trim()
 
-  if (!nombre || !codigoBarras) {
-    errorForm.value = 'Nombre y codigo de barras son obligatorios.'
+  if (!nombre) {
+    errorForm.value = 'El nombre es obligatorio.'
     return
   }
 
   const payload = {
-    codigo_barras: codigoBarras,
+    codigo_barras: codigoBarras || null,
     nombre,
     name: nombre,
     categoria_id: form.categoriaId,
@@ -534,7 +569,7 @@ const crearProducto = async () => {
     const normalizado = normalizarProducto(fuente, productos.length)
     if (normalizado) {
       productos.unshift(normalizado)
-      guardarProductosCache()
+      await guardarProductosCache()
     }
     resetForm()
     mostrarFormulario.value = false
@@ -574,8 +609,8 @@ const guardarEdicionFila = async () => {
   const nombre = filaEdicion.nombre.trim()
   const codigoBarras = filaEdicion.codigoBarras.trim()
 
-  if (!nombre || !codigoBarras) {
-    errorForm.value = 'Nombre y codigo de barras son obligatorios.'
+  if (!nombre) {
+    errorForm.value = 'El nombre es obligatorio.'
     return
   }
 
@@ -589,7 +624,7 @@ const guardarEdicionFila = async () => {
   const precioVentaSeguro = redondearPrecioMonedaCop(costoSeguro * (1 + margenSeguro / 100) * (1 + ivaSeguro / 100))
 
   const payload = {
-    codigo_barras: codigoBarras,
+    codigo_barras: codigoBarras || null,
     nombre,
     name: nombre,
     categoria_id: categoriaId,
@@ -639,7 +674,7 @@ const guardarEdicionFila = async () => {
         producto.estado = estadoSeguro
       }
     }
-    guardarProductosCache()
+    await guardarProductosCache()
     mostrarFormularioEdicion.value = false
     productoEdicionId.value = null
     filaEdicionId.value = null
@@ -662,7 +697,7 @@ const toggleEstado = async (id: number) => {
 
   const payload = { estado: nuevoEstado === 'activo' }
   const payloadCompleto = {
-    codigo_barras: item.codigoBarras,
+    codigo_barras: item.codigoBarras?.trim() ? item.codigoBarras.trim() : null,
     nombre: item.nombre,
     name: item.nombre,
     categoria_id: item.categoriaId,
@@ -685,7 +720,7 @@ const toggleEstado = async (id: number) => {
         Object.assign(item, normalizado)
       }
     }
-    guardarProductosCache()
+    await guardarProductosCache()
   } catch (error) {
     console.error('Error al cambiar estado', error)
     item.estado = estadoAnterior
@@ -693,8 +728,9 @@ const toggleEstado = async (id: number) => {
   }
 }
 
-const categoriaNombre = (id: number | null) =>
-  categorias.find((categoria) => categoria.id === id)?.nombre ?? 'Sin categoria'
+function categoriaNombre(id: number | null) {
+  return categorias.find((categoria) => categoria.id === id)?.nombre ?? 'Sin categoria'
+}
 </script>
 
 <template>
@@ -770,7 +806,7 @@ const categoriaNombre = (id: number | null) =>
 
         <form class="form" @submit.prevent="crearProducto">
           <label>
-            <span>Codigo de barras</span>
+            <span>Codigo de barras (opcional)</span>
             <input
               v-model="form.codigoBarras"
               type="text"
@@ -885,7 +921,7 @@ const categoriaNombre = (id: number | null) =>
 
         <form class="form" @submit.prevent="guardarEdicionFila">
           <label>
-            <span>Codigo de barras</span>
+            <span>Codigo de barras (opcional)</span>
             <input v-model="filaEdicion.codigoBarras" type="text" placeholder="7701234500019" />
           </label>
           <label>
@@ -954,7 +990,7 @@ const categoriaNombre = (id: number | null) =>
         </div>
 
         <div
-          v-for="producto in productosFiltrados"
+          v-for="producto in productosPaginados"
           :key="producto.id"
           :class="['tabla__fila', { 'tabla__fila--edicion': filaEdicionId === producto.id }]"
         >
@@ -984,7 +1020,7 @@ const categoriaNombre = (id: number | null) =>
             </div>
             <div v-else>
               <p class="producto__nombre">{{ producto.nombre }}</p>
-              <small>{{ producto.codigoBarras }} · {{ producto.descripcion || 'Sin descripcion' }}</small>
+              <small>{{ producto.codigoBarras ? `${producto.codigoBarras} � ` : '' }}{{ producto.descripcion || 'Sin descripcion' }}</small>
             </div>
           </div>
           <span v-if="filaEdicionId === producto.id">
@@ -1125,6 +1161,45 @@ const categoriaNombre = (id: number | null) =>
           </div>
         </div>
       </div>
+      <footer class="paginacion">
+        <label class="paginacion__tam">
+          Filas
+          <select v-model.number="tamanioPagina">
+            <option :value="10">10</option>
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+            <option :value="100">100</option>
+          </select>
+        </label>
+        <p class="paginacion__meta">
+          Mostrando {{ indiceInicio }}-{{ indiceFin }} de {{ productosFiltrados.length }} · Página {{ paginaActual }} de
+          {{ totalPaginas }}
+        </p>
+        <div class="paginacion__acciones">
+          <button type="button" class="boton secundaria" :disabled="paginaActual <= 1" @click="irPagina(1)">
+            Primera
+          </button>
+          <button type="button" class="boton secundaria" :disabled="paginaActual <= 1" @click="irPagina(paginaActual - 1)">
+            Anterior
+          </button>
+          <button
+            type="button"
+            class="boton secundaria"
+            :disabled="paginaActual >= totalPaginas"
+            @click="irPagina(paginaActual + 1)"
+          >
+            Siguiente
+          </button>
+          <button
+            type="button"
+            class="boton secundaria"
+            :disabled="paginaActual >= totalPaginas"
+            @click="irPagina(totalPaginas)"
+          >
+            Última
+          </button>
+        </div>
+      </footer>
     </section>
   </main>
 </template>
@@ -1420,6 +1495,44 @@ const categoriaNombre = (id: number | null) =>
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.paginacion {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.paginacion__tam {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+}
+
+.paginacion__tam select {
+  border-radius: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.35rem 0.5rem;
+  background: rgba(8, 10, 14, 0.9);
+  color: #e2e8f0;
+}
+
+.paginacion__meta {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.paginacion__acciones {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 .producto__nombre {

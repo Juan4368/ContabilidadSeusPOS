@@ -21,8 +21,11 @@ window.addEventListener('focusin', (event) => {
 createApp(App).mount('#app').$nextTick(() => {
   initOfflineQueue()
   void processOfflineQueue()
-  // Use contextBridge
-  window.ipcRenderer.on('main-process-message', (_event, message) => {
-    console.log(message)
-  })
+  const ipc = (window as unknown as { ipcRenderer?: { on: (c: string, cb: (...args: unknown[]) => void) => void } })
+    .ipcRenderer
+  if (ipc?.on) {
+    ipc.on('main-process-message', (_event, message) => {
+      console.log(message)
+    })
+  }
 })
