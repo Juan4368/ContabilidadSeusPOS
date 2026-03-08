@@ -1599,6 +1599,40 @@ const construirHtmlTicket = (
   </section>`
 }
 
+// Imprime el HTML en un iframe oculto para evitar el bloqueo de popups del navegador
+const imprimirHtmlSinPopup = async (html: string) =>
+  new Promise<void>((resolve, reject) => {
+    try {
+      const iframe = document.createElement('iframe')
+      iframe.style.position = 'fixed'
+      iframe.style.right = '0'
+      iframe.style.bottom = '0'
+      iframe.style.width = '0'
+      iframe.style.height = '0'
+      iframe.style.border = '0'
+      iframe.style.visibility = 'hidden'
+      document.body.appendChild(iframe)
+
+      const doc = iframe.contentDocument
+      if (!doc) throw new Error('No se pudo crear el documento de impresion.')
+      doc.open()
+      doc.write(`<!doctype html><html><head><title>Ticket</title></head><body>${html}</body></html>`)
+      doc.close()
+
+      const win = iframe.contentWindow
+      if (!win) throw new Error('No se pudo acceder a la ventana de impresion.')
+      win.focus()
+      win.print()
+
+      setTimeout(() => {
+        iframe.remove()
+        resolve()
+      }, 300)
+    } catch (error) {
+      reject(error)
+    }
+  })
+
 const imprimirTicket = async () => {
   const resumen = {
     subtotal: resumenCarrito.value.subtotalBruto,
@@ -1610,21 +1644,10 @@ const imprimirTicket = async () => {
   }
   const ipc = (window as unknown as { ipcRenderer?: { invoke: (c: string, p: unknown) => Promise<void> } }).ipcRenderer
   if (!ipc?.invoke) {
-    const html = construirHtmlTicket(
-      carrito.value,
-      resumen,
-      numeroFacturaResumen.value,
-      80,
-      1
-    )
-    const w = window.open('', '_blank', 'noopener,noreferrer')
-    if (w) {
-      w.document.open()
-      w.document.write(`<!doctype html><html><head><title>Ticket</title></head><body>${html}</body></html>`)
-      w.document.close()
-      w.focus()
-      w.print()
-    } else {
+    const html = construirHtmlTicket(carrito.value, resumen, numeroFacturaResumen.value, 80, 1)
+    try {
+      await imprimirHtmlSinPopup(html)
+    } catch {
       window.alert('No se pudo abrir la ventana de impresion. Revisa el bloqueo de popups.')
     }
     return
@@ -1812,14 +1835,9 @@ const imprimirTicketResumen = async () => {
       80,
       1
     )
-    const w = window.open('', '_blank', 'noopener,noreferrer')
-    if (w) {
-      w.document.open()
-      w.document.write(`<!doctype html><html><head><title>Ticket</title></head><body>${html}</body></html>`)
-      w.document.close()
-      w.focus()
-      w.print()
-    } else {
+    try {
+      await imprimirHtmlSinPopup(html)
+    } catch {
       window.alert('No se pudo abrir la ventana de impresion. Revisa el bloqueo de popups.')
     }
     return
